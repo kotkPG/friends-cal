@@ -1,0 +1,88 @@
+.page {
+  max-width: 920px;
+  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+}
+
+.hero {
+  background: linear-gradient(140deg, #0f766e, #155e75);
+  color: #f4fffd;
+  border-radius: 18px;
+  padding: 28px;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+h1 {
+  margin: 8px 0 10px;
+  line-height: 1.1;
+  font-size: clamp(1.7rem, 5vw, 2.8rem);
+}
+
+.lead {
+  margin: 0;
+  max-width: 58ch;
+}
+
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+#googleSignInButton {
+  margin: 12px 0;
+}
+
+.userBox {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  border: 1px solid #b6eadf;
+}
+
+.userBox img {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+}
+
+ol {
+  margin-bottom: 0;
+}
+
+code {
+  background: #f4efe4;
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+
+@media (max-width: 640px) {
+  .hero {
+    padding: 22px;
+  }
+
+  .card {
+    padding: 16px;
+  }
+}
