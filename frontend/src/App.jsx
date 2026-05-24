@@ -1140,57 +1140,80 @@ function App() {
         )}
       </section>
 
-      {calendars.length > 0 && (
+      {user && (
         <section className="card">
           <h2>Calendar availability settings</h2>
-          <details className="calendarSettingsDisclosure" open>
-            <summary className="calendarSettingsSummary">
-              Choose how each calendar contributes to your availability
-            </summary>
-            <p className="muted calendarSettingsHint">
-              Keep this clean by default and only adjust modes when needed.
-            </p>
+          {calendars.length === 0 ? (
+            <>
+              <p className="muted">
+                Calendar list has not loaded yet. Connect your calendar, then refresh availability.
+              </p>
+              {!accessToken && (
+                <button
+                  className="btnPrimary"
+                  onClick={() => {
+                    void connectCalendar()
+                  }}
+                  disabled={calendarLoading || isAutoConnecting}
+                >
+                  {calendarLoading || isAutoConnecting
+                    ? 'Connecting calendar...'
+                    : 'Connect calendar'}
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <details className="calendarSettingsDisclosure" open>
+                <summary className="calendarSettingsSummary">
+                  Choose how each calendar contributes to your availability
+                </summary>
+                <p className="muted calendarSettingsHint">
+                  Keep this clean by default and only adjust modes when needed.
+                </p>
 
-            <div className="calendarModeList">
-              {calendars.map((cal) => (
-                <div key={cal.id} className="calendarModeRow">
-                  <div className="calModeLabel">
-                    <span className="calDot" style={{ background: cal.backgroundColor || '#94a3b8' }} />
-                    <span className="calModeName">
-                      {cal.primary ? 'Main — ' : ''}{cal.summary}
-                    </span>
-                  </div>
-                  <div className="calModeButtons">
-                    <button
-                      type="button"
-                      className={`calModeBtn ${calendarModes[cal.id] === 'free' ? 'calModeBtnActive calModeBtnFree' : ''}`}
-                      onClick={() => setCalendarMode(cal.id, 'free')}
-                    >
-                      Show as free
-                    </button>
-                    <button
-                      type="button"
-                      className={`calModeBtn ${calendarModes[cal.id] === 'individual' ? 'calModeBtnActive calModeBtnIndividual' : ''}`}
-                      onClick={() => setCalendarMode(cal.id, 'individual')}
-                    >
-                      Decide individually
-                    </button>
-                    <button
-                      type="button"
-                      className={`calModeBtn ${calendarModes[cal.id] === 'unavailable' ? 'calModeBtnActive calModeBtnUnavailable' : ''}`}
-                      onClick={() => setCalendarMode(cal.id, 'unavailable')}
-                    >
-                      Show as unavailable
-                    </button>
-                  </div>
+                <div className="calendarModeList">
+                  {calendars.map((cal) => (
+                    <div key={cal.id} className="calendarModeRow">
+                      <div className="calModeLabel">
+                        <span className="calDot" style={{ background: cal.backgroundColor || '#94a3b8' }} />
+                        <span className="calModeName">
+                          {cal.primary ? 'Main — ' : ''}{cal.summary}
+                        </span>
+                      </div>
+                      <div className="calModeButtons">
+                        <button
+                          type="button"
+                          className={`calModeBtn ${calendarModes[cal.id] === 'free' ? 'calModeBtnActive calModeBtnFree' : ''}`}
+                          onClick={() => setCalendarMode(cal.id, 'free')}
+                        >
+                          Show as free
+                        </button>
+                        <button
+                          type="button"
+                          className={`calModeBtn ${calendarModes[cal.id] === 'individual' ? 'calModeBtnActive calModeBtnIndividual' : ''}`}
+                          onClick={() => setCalendarMode(cal.id, 'individual')}
+                        >
+                          Decide individually
+                        </button>
+                        <button
+                          type="button"
+                          className={`calModeBtn ${calendarModes[cal.id] === 'unavailable' ? 'calModeBtnActive calModeBtnUnavailable' : ''}`}
+                          onClick={() => setCalendarMode(cal.id, 'unavailable')}
+                        >
+                          Show as unavailable
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </details>
+              </details>
 
-          <p className="muted liveSyncNote">
-            Calendar updates are applied live. No manual refresh needed.
-          </p>
+              <p className="muted liveSyncNote">
+                Calendar updates are applied live. No manual refresh needed.
+              </p>
+            </>
+          )}
         </section>
       )}
 
@@ -1309,16 +1332,21 @@ function App() {
         </section>
       )}
 
-      {calendars.length > 0 && (
+      {user && (
         <section className="card">
           <h2>Trip filters</h2>
-          <p className="muted">These filters update day-by-day results immediately.</p>
+          {calendars.length === 0 ? (
+            <p className="muted">Trip filters will appear after calendar availability is loaded.</p>
+          ) : (
+            <p className="muted">These filters update day-by-day results immediately.</p>
+          )}
 
           <div className="tripControls">
             <label htmlFor="requiredDays">Trip length (full days):</label>
             <select
               id="requiredDays"
               value={requiredDays}
+              disabled={calendars.length === 0}
               onChange={(e) => setRequiredDays(Number(e.target.value))}
             >
               {[1, 2, 3, 4, 5, 6, 7].map((n) => (
@@ -1335,12 +1363,13 @@ function App() {
                 id="includeWeekends"
                 type="checkbox"
                 checked={includeWeekends}
+                disabled={calendars.length === 0}
                 onChange={(e) => setIncludeWeekends(e.target.checked)}
               />
               Weekend anchored windows (Sat/Sun focused)
             </label>
           </div>
-          {includeWeekends && (
+          {calendars.length > 0 && includeWeekends && (
             <>
               <p className="muted tripHint">
                 {requiredDays === 1
@@ -1387,9 +1416,16 @@ function App() {
         </section>
       )}
 
-      {busyBlocks && (
+      {user && (
         <section className="card">
           <h2>Day-by-day availability (current + next 4 full months)</h2>
+          {!busyBlocks && (
+            <p className="muted">
+              Day-by-day availability appears after calendar data is loaded.
+            </p>
+          )}
+          {busyBlocks && (
+          <>
           <div className="calendarLegend">
             <h3>Legend</h3>
             <div className="legendGrid">
@@ -1581,6 +1617,8 @@ function App() {
               </div>
             </aside>
           </div>
+          </>
+          )}
         </section>
       )}
     </main>
