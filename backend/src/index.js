@@ -129,6 +129,7 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/config', (_req, res) => {
   res.json({
     hasGoogleClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+    googleClientId: process.env.GOOGLE_CLIENT_ID || '',
     corsOrigins,
     calendarReadScope: 'https://www.googleapis.com/auth/calendar.readonly',
   });

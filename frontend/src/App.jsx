@@ -88,6 +88,9 @@ function App() {
   const [health, setHealth] = useState('Checking backend...')
   const [serverMessage, setServerMessage] = useState('')
   const [user, setUser] = useState(null)
+  const [googleClientId, setGoogleClientId] = useState(
+    () => import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
+  )
 
   // Calendar state
   const [accessToken, setAccessToken] = useState(null)
@@ -160,7 +163,7 @@ function App() {
 
   // Request calendar access and load calendars.
   const connectCalendar = useCallback(() => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+    const clientId = googleClientId
 
     if (!clientId) {
       setCalendarError('VITE_GOOGLE_CLIENT_ID not configured.')
@@ -261,7 +264,7 @@ function App() {
         resolve(false)
       }
     })
-  }, [apiBase, loadCalendarsForToken])
+  }, [apiBase, googleClientId, loadCalendarsForToken])
 
   useEffect(() => {
     const rawUser = localStorage.getItem(STORAGE_USER_KEY)
@@ -315,7 +318,25 @@ function App() {
   }, [apiBase])
 
   useEffect(() => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+    if (googleClientId) return
+
+    async function loadRuntimeConfig() {
+      try {
+        const response = await fetch(`${apiBase}/api/config`)
+        const data = await response.json()
+        if (data?.googleClientId) {
+          setGoogleClientId(data.googleClientId)
+        }
+      } catch (_error) {
+        // non-blocking; frontend env var may still provide the client id
+      }
+    }
+
+    void loadRuntimeConfig()
+  }, [apiBase, googleClientId])
+
+  useEffect(() => {
+    const clientId = googleClientId
 
     if (!clientId) {
       console.error('VITE_GOOGLE_CLIENT_ID is not set')
@@ -383,7 +404,7 @@ function App() {
       console.error('❌ Error initializing Google Sign-In:', error)
       setServerMessage('Error initializing Google Sign-In: ' + error.message)
     }
-  }, [apiBase, connectCalendar])
+  }, [apiBase, connectCalendar, googleClientId])
 
   useEffect(() => {
     if (!user?.id || calendars.length === 0) return
@@ -1019,9 +1040,9 @@ function App() {
 
       <section className="card">
         <h2>Sign in and connect Google Calendar</h2>
-        {!user && (
+        {!user && !googleClientId && (
           <p className="muted">
-            Add your OAuth client ID in <code>.env</code> to activate this button.
+            Waiting for Google OAuth client ID from environment or backend config.
           </p>
         )}
         {!user && <div id="googleSignInButton" />}
