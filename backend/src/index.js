@@ -91,7 +91,29 @@ function saveBusyBlocksForUser(userId, { userName, userEmail, blocks }) {
 const app = express();
 const port = process.env.PORT || 8080;
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+const corsOrigins = String(process.env.CORS_ORIGIN || '*')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+  .map((origin) => origin.replace(/\/+$/, ''));
+
+const allowAllCorsOrigins = corsOrigins.includes('*');
+
+app.use(cors({
+  origin(origin, callback) {
+    // Allow non-browser requests (curl, health checks) that do not send Origin.
+    if (!origin || allowAllCorsOrigins) {
+      return callback(null, true);
+    }
+
+    const normalizedOrigin = String(origin).replace(/\/+$/, '');
+    if (corsOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+}));
 app.use(express.json());
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '');
@@ -107,6 +129,7 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/config', (_req, res) => {
   res.json({
     hasGoogleClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+    corsOrigins,
     calendarReadScope: 'https://www.googleapis.com/auth/calendar.readonly',
   });
 });
