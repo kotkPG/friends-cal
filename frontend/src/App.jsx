@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -102,15 +102,30 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
 
+function getDefaultApiBase() {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8080'
+  }
+
+  const host = String(window.location.hostname || '').toLowerCase()
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1'
+  if (isLocalHost) {
+    return 'http://localhost:8080'
+  }
+
+  return window.location.origin
+}
+
 function App() {
   const apiBase = useMemo(
-    () => import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080',
+    () => import.meta.env.VITE_API_BASE_URL || getDefaultApiBase(),
     [],
   )
   const [health, setHealth] = useState('Checking backend...')
   const [serverMessage, setServerMessage] = useState('')
   const [user, setUser] = useState(null)
   const [idToken, setIdToken] = useState(() => localStorage.getItem(STORAGE_ID_TOKEN_KEY) || '')
+  const idTokenRef = useRef(idToken)
   const [googleClientId, setGoogleClientId] = useState(
     () => import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
   )
@@ -213,7 +228,7 @@ function App() {
     [user?.name, user?.email],
   )
   const onboardingSteps = useMemo(() => {
-    const hasGroup = Boolean(activeGroupId)
+    const hasGroup = Boolean(activeGroupId) || groups.length > 0
     const hasCalendars = calendars.length > 0
     const hasBusyData = Boolean(busyBlocks)
     const hasIndividualChoices = Object.values(calendarModes).some((mode) => mode === 'individual')
@@ -250,7 +265,7 @@ function App() {
         done: Boolean(user) && hasBusyData,
       },
     ]
-  }, [activeGroupId, busyBlocks, calendarModes, calendars.length, user])
+  }, [activeGroupId, busyBlocks, calendarModes, calendars.length, groups.length, user])
   const completedStepCount = onboardingSteps.filter((step) => step.done).length
   const calendarWindow = useMemo(() => {
     const start = new Date()
@@ -266,14 +281,36 @@ function App() {
   }, [])
   const authHeaders = useCallback(
     (headers = {}) => {
-      if (!idToken) return { ...headers }
+      const token = idTokenRef.current
+      if (!token) return { ...headers }
       return {
         ...headers,
-        Authorization: `Bearer ${idToken}`,
+        Authorization: `Bearer ${token}`,
       }
     },
-    [idToken],
+    [],
   )
+
+  useEffect(() => {
+    idTokenRef.current = idToken
+  }, [idToken])
+
+  const clearAuthSession = useCallback((message = 'Session expired. Please sign in again.') => {
+    localStorage.removeItem(STORAGE_USER_KEY)
+    localStorage.removeItem(STORAGE_ID_TOKEN_KEY)
+    localStorage.removeItem(STORAGE_TOKEN_KEY)
+    idTokenRef.current = ''
+    setUser(null)
+    setIdToken('')
+    setAccessToken(null)
+    setCalendars([])
+    setGroups([])
+    setMembers([])
+    setActiveGroupId('')
+    setBusyBlocks(null)
+    setGroupBusyBlocks([])
+    setServerMessage(message)
+  }, [])
 
   const loadCalendarsForToken = useCallback(
     async (token) => {
@@ -395,17 +432,19 @@ function App() {
             }
 
             console.log('✅ Access token received')
-            setAccessToken(tokenResponse.access_token)
-            localStorage.setItem(STORAGE_TOKEN_KEY, tokenResponse.access_token)
             setCalendarError('')
             setCalendarLoading(true)
 
             try {
               await loadCalendarsForToken(tokenResponse.access_token)
+              setAccessToken(tokenResponse.access_token)
+              localStorage.setItem(STORAGE_TOKEN_KEY, tokenResponse.access_token)
               console.log('✅ Calendars loaded')
               resolve(true)
             } catch (err) {
               console.error('❌ Calendar list fetch error:', err)
+              setAccessToken(null)
+              localStorage.removeItem(STORAGE_TOKEN_KEY)
               setCalendarError(err.message)
               resolve(false)
             } finally {
@@ -426,6 +465,33 @@ function App() {
       }
     })
   }, [apiBase, googleClientId, loadCalendarsForToken, user?.email])
+
+  const refreshCalendarConnection = useCallback(async () => {
+    setCalendarError('')
+
+    if (accessToken) {
+      setCalendarLoading(true)
+      try {
+        await loadCalendarsForToken(accessToken)
+        setServerMessage('Calendar list refreshed.')
+        return true
+      } catch (err) {
+        console.error('❌ Calendar refresh error:', err)
+        localStorage.removeItem(STORAGE_TOKEN_KEY)
+        setAccessToken(null)
+      } finally {
+        setCalendarLoading(false)
+      }
+    }
+
+    const connected = await connectCalendar()
+    setServerMessage(
+      connected
+        ? 'Calendar reconnected.'
+        : 'Calendar reconnection needs approval. Use the button again if needed.',
+    )
+    return connected
+  }, [accessToken, connectCalendar, loadCalendarsForToken])
 
   useEffect(() => {
     const rawUser = localStorage.getItem(STORAGE_USER_KEY)
@@ -908,8 +974,15 @@ function App() {
       const res = await fetch(`${apiBase}/api/groups?userId=${encodeURIComponent(user.id)}`, {
         headers: authHeaders(),
       })
-      const data = await res.json()
-      if (!res.ok) return []
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (res.status === 401) {
+          clearAuthSession('Authentication failed. Please sign in again.')
+          return []
+        }
+        setGroupNotice(data.error || 'Could not load groups.')
+        return []
+      }
 
       const fetched = data.groups || []
       setGroups(fetched)
@@ -919,9 +992,10 @@ function App() {
       })
       return fetched
     } catch (_err) {
+      setGroupNotice('Could not load groups right now.')
       return []
     }
-  }, [apiBase, authHeaders, user?.id])
+  }, [apiBase, authHeaders, clearAuthSession, user?.id])
 
   const refreshMembers = useCallback(async () => {
     if (!activeGroupId) {
@@ -936,11 +1010,13 @@ function App() {
       const data = await res.json()
       if (res.ok) {
         setMembers(data.members || [])
+      } else if (res.status === 401) {
+        clearAuthSession('Authentication failed. Please sign in again.')
       }
     } catch (_err) {
       // non-blocking
     }
-  }, [activeGroupId, apiBase, authHeaders])
+  }, [activeGroupId, apiBase, authHeaders, clearAuthSession])
 
   useEffect(() => {
     if (!user?.id) {
@@ -2114,7 +2190,18 @@ function App() {
               </button>
             )}
 
-            {accessToken && <p className="badge">Calendar connected</p>}
+            {accessToken && calendars.length > 0 && <p className="badge">Calendar connected</p>}
+
+            <button
+              type="button"
+              className="roleActionBtn"
+              onClick={() => {
+                void refreshCalendarConnection()
+              }}
+              disabled={calendarLoading || isAutoConnecting}
+            >
+              {calendarLoading || isAutoConnecting ? 'Refreshing calendar...' : 'Refresh calendar connection'}
+            </button>
 
             <div className="privacyExitRow">
               <p className="muted privacyExitText">
@@ -2648,19 +2735,19 @@ function App() {
               <p className="muted">
                 Calendar list has not loaded yet. Connect your calendar, then refresh availability.
               </p>
-              {!accessToken && (
-                <button
-                  className="btnPrimary"
-                  onClick={() => {
-                    void connectCalendar()
-                  }}
-                  disabled={calendarLoading || isAutoConnecting}
-                >
-                  {calendarLoading || isAutoConnecting
-                    ? 'Connecting calendar...'
+              <button
+                className="btnPrimary"
+                onClick={() => {
+                  void refreshCalendarConnection()
+                }}
+                disabled={calendarLoading || isAutoConnecting}
+              >
+                {calendarLoading || isAutoConnecting
+                  ? 'Connecting calendar...'
+                  : accessToken
+                    ? 'Reconnect calendar'
                     : 'Connect calendar'}
-                </button>
-              )}
+              </button>
             </>
           ) : (
             <>
