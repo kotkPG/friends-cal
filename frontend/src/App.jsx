@@ -1365,6 +1365,11 @@ function App() {
   }, [findBusyBlocks, accessToken, calendars.length, activeGroupId])
 
   const joinedGroupBusyBlocks = useMemo(() => {
+    const memberByUserId = new Map(
+      members
+        .map((m) => [String(m.userId || '').trim(), m])
+        .filter(([uid]) => Boolean(uid)),
+    )
     const joinedUserIds = new Set(
       members
         .map((m) => String(m.userId || '').trim())
@@ -1382,6 +1387,13 @@ function App() {
 
       const memberEmail = String(m.userEmail || '').trim().toLowerCase()
       return Boolean(memberEmail) && joinedEmails.has(memberEmail)
+    }).map((m) => {
+      const profile = memberByUserId.get(String(m.userId || '').trim()) || {}
+      return {
+        ...m,
+        userName: String(m.userName || profile.name || '').trim(),
+        userEmail: String(m.userEmail || profile.email || '').trim().toLowerCase(),
+      }
     })
   }, [groupBusyBlocks, members])
 
@@ -1501,7 +1513,11 @@ function App() {
           if (blocking) {
             stat.count += 1
             if (connectedUserInitial && user?.email) {
-              stat.busyOwners.set(user.email, { initial: connectedUserInitial, isSelf: true })
+              stat.busyOwners.set(String(user.id || user.email), {
+                ownerKey: String(user.id || user.email),
+                initial: connectedUserInitial,
+                isSelf: true,
+              })
             }
           }
           stat.events.push({
@@ -1523,6 +1539,7 @@ function App() {
     // Process group members' events
     activeGroupBlocks.forEach((member) => {
       const ownerInitial = getInitials(member.userName || member.userEmail)
+      const ownerKey = String(member.userId || member.userEmail || '').trim()
       const memberDecisions = groupDecisionsByUserId[String(member.userId)] || {}
       ;(member.blocks || []).forEach((event) => {
         const range = parseEventRange(event)
@@ -1535,8 +1552,12 @@ function App() {
         days.forEach((day) => {
           if (day.dayStartMs < range.endMs && day.dayEndMs > range.startMs) {
             const stat = dayStats.get(day.dayKey)
-            if (isBlocking && !stat.busyOwners.has(member.userEmail)) {
-              stat.busyOwners.set(member.userEmail, { initial: ownerInitial, isSelf: false })
+            if (isBlocking && ownerKey && !stat.busyOwners.has(ownerKey)) {
+              stat.busyOwners.set(ownerKey, {
+                ownerKey,
+                initial: ownerInitial,
+                isSelf: false,
+              })
             }
             stat.events.push({
               id: event.id || `${member.userEmail}-${event.title}-${event.start?.dateTime || event.start?.date}`,
@@ -1565,10 +1586,39 @@ function App() {
         }
         return getEventStartMs(a) - getEventStartMs(b)
       })
+
+      const ownerInitials = new Map()
+      if (connectedUserInitial) {
+        const hasOwnBlocking = stat.events.some((event) => event.isOwn && event.isBlocking)
+        if (hasOwnBlocking) {
+          const selfOwnerKey = `self:${String(user?.id || user?.email || 'self')}`
+          ownerInitials.set(selfOwnerKey, {
+            ownerKey: selfOwnerKey,
+            initial: connectedUserInitial,
+            isSelf: true,
+          })
+        }
+      }
+      stat.events
+        .filter((event) => !event.isOwn && event.isBlocking)
+        .forEach((event) => {
+          const ownerLabel = String(event.ownerEmail || event.ownerName || '').trim().toLowerCase()
+          if (!ownerLabel) return
+          const ownerKey = `other:${ownerLabel}`
+          if (ownerInitials.has(ownerKey)) return
+          const initial = getInitials(event.ownerName || event.ownerEmail)
+          if (!initial) return
+          ownerInitials.set(ownerKey, {
+            ownerKey,
+            initial,
+            isSelf: false,
+          })
+        })
+
       day.eventCount = stat.count + (stat.busyOwners.size - (stat.count > 0 ? 1 : 0))
       day.events = stat.events.filter((e) => e.isOwn)
       day.groupEvents = stat.events.filter((e) => !e.isOwn)
-      day.personInitials = Array.from(stat.busyOwners.values())
+      day.personInitials = Array.from(ownerInitials.values())
     })
 
     const candidateStarts = new Set()
@@ -1644,6 +1694,7 @@ function App() {
     calendarModes,
     eventOverrides,
     connectedUserInitial,
+    user?.id,
     user?.email,
   ])
 
@@ -2985,12 +3036,12 @@ function App() {
                           >
                             <span className="dayTitle">{day.dayLabel.split(' ')[1]}</span>
                             {day.isFree && <div className="freeIndicator" />}
-                            {day.eventCount > 0 && (
+                            {day.personInitials.length > 0 && (
                               <>
                                 <div className="dayPeopleRow">
-                                  {day.personInitials.map(({ initial, isSelf }) => (
+                                  {day.personInitials.map(({ ownerKey, initial, isSelf }) => (
                                     <span
-                                      key={`${day.dayKey}-${initial}`}
+                                      key={`${day.dayKey}-${ownerKey || initial}`}
                                       className={`personInitialBadge${isSelf ? '' : ' personInitialBadgeOther'}`}
                                     >
                                       {initial}

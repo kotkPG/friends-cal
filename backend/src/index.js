@@ -981,21 +981,43 @@ app.get('/api/calendar/group-busy-blocks', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'You are not a member of this group.' });
   }
 
-  const allowedUserIds = new Set(Object.keys(group.members || {}));
+  const memberProfiles = group.members || {};
+  const allowedUserIds = new Set(Object.keys(memberProfiles));
+  const userIdByEmail = new Map(
+    Object.entries(memberProfiles)
+      .map(([uid, profile]) => [String(profile?.email || '').trim().toLowerCase(), String(uid)])
+      .filter(([email]) => Boolean(email)),
+  );
+
   const store = loadBusyBlocksStore();
-  const members = Object.entries(store)
-    .filter(([uid]) => allowedUserIds.has(String(uid)))
-    .filter(([uid]) => !excludeUserId || uid !== String(excludeUserId))
-    .map(([uid, data]) => {
-      const profile = group.members?.[String(uid)] || {};
-      return {
-        userId: uid,
-        userName: data.userName || profile.name || '',
-        userEmail: data.userEmail || profile.email || '',
-        updatedAt: data.updatedAt || '',
-        blocks: data.blocks || [],
-      };
-    });
+
+  const mergedByUserId = new Map();
+  Object.entries(store).forEach(([rawUid, data]) => {
+    const uid = String(rawUid);
+    const dataEmail = String(data?.userEmail || '').trim().toLowerCase();
+    const canonicalUserId = allowedUserIds.has(uid)
+      ? uid
+      : (dataEmail ? userIdByEmail.get(dataEmail) : '');
+
+    if (!canonicalUserId) return;
+    if (excludeUserId && canonicalUserId === String(excludeUserId)) return;
+
+    const profile = memberProfiles[canonicalUserId] || {};
+    const candidate = {
+      userId: canonicalUserId,
+      userName: data.userName || profile.name || '',
+      userEmail: data.userEmail || profile.email || '',
+      updatedAt: data.updatedAt || '',
+      blocks: data.blocks || [],
+    };
+
+    const existing = mergedByUserId.get(canonicalUserId);
+    if (!existing || String(candidate.updatedAt || '') >= String(existing.updatedAt || '')) {
+      mergedByUserId.set(canonicalUserId, candidate);
+    }
+  });
+
+  const members = Array.from(mergedByUserId.values());
   return res.json({ members });
 });
 
