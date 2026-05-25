@@ -140,6 +140,10 @@ function App() {
   const [calendarModesLoaded, setCalendarModesLoaded] = useState(false)
   const [isAutoConnecting, setIsAutoConnecting] = useState(false)
   const [showSupportModal, setShowSupportModal] = useState(false)
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticsResults, setDiagnosticsResults] = useState([])
+  const [diagnosticsLastRunAt, setDiagnosticsLastRunAt] = useState('')
   const [showPlatformAdminModal, setShowPlatformAdminModal] = useState(false)
   const [privacyExitLoading, setPrivacyExitLoading] = useState(false)
   const [privacyExitNotice, setPrivacyExitNotice] = useState('')
@@ -676,6 +680,81 @@ function App() {
     }
   }, [])
 
+  const runDiagnostics = useCallback(async () => {
+    setDiagnosticsLoading(true)
+    setDiagnosticsResults([])
+
+    const checks = []
+    const addCheck = (label, passed, detail, severity = 'error') => {
+      checks.push({
+        label,
+        passed,
+        detail,
+        severity,
+      })
+    }
+
+    const runCheck = async (label, fn, severity = 'error') => {
+      try {
+        const detail = await fn()
+        addCheck(label, true, detail, severity)
+      } catch (error) {
+        addCheck(label, false, error.message || 'Check failed.', severity)
+      }
+    }
+
+    await runCheck('API health endpoint', async () => {
+      const response = await fetch(`${apiBase}/api/health`, {
+        signal: AbortSignal.timeout(8000),
+      })
+      if (!response.ok) {
+        throw new Error(`Expected 200, got ${response.status}.`)
+      }
+      const data = await response.json()
+      if (!data?.ok) {
+        throw new Error('Health payload did not report ok=true.')
+      }
+      return `OK (${response.status})`
+    })
+
+    await runCheck('Protected route blocks anonymous access', async () => {
+      const response = await fetch(
+        `${apiBase}/api/groups?userId=${encodeURIComponent('diagnostics-user')}`,
+        {
+          signal: AbortSignal.timeout(8000),
+        },
+      )
+      if (response.status !== 401) {
+        throw new Error(`Expected 401, got ${response.status}.`)
+      }
+      return 'Unauthorized request correctly denied (401).'
+    })
+
+    await runCheck('Authenticated group read', async () => {
+      if (!user?.id || !idToken) {
+        return 'Skipped: sign in first to validate authenticated checks.'
+      }
+
+      const response = await fetch(
+        `${apiBase}/api/groups?userId=${encodeURIComponent(user.id)}`,
+        {
+          headers: authHeaders(),
+          signal: AbortSignal.timeout(8000),
+        },
+      )
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || `Expected 200, got ${response.status}.`)
+      }
+      const data = await response.json()
+      return `OK (${response.status}) · ${Array.isArray(data.groups) ? data.groups.length : 0} group(s)`
+    }, 'warning')
+
+    setDiagnosticsResults(checks)
+    setDiagnosticsLastRunAt(new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))
+    setDiagnosticsLoading(false)
+  }, [apiBase, authHeaders, idToken, user?.id])
+
   const resetLocalSession = useCallback(() => {
     localStorage.removeItem(STORAGE_USER_KEY)
     localStorage.removeItem(STORAGE_TOKEN_KEY)
@@ -775,6 +854,7 @@ function App() {
     function onKeyDown(e) {
       if (e.key === 'Escape') {
         setShowSupportModal(false)
+        setShowDiagnosticsModal(false)
         setShowPlatformAdminModal(false)
         setShowProposalModal(false)
       }
@@ -788,6 +868,11 @@ function App() {
     const timeoutId = setTimeout(() => setProposalNotice(''), 2600)
     return () => clearTimeout(timeoutId)
   }, [proposalNotice])
+
+  useEffect(() => {
+    if (!showDiagnosticsModal || diagnosticsResults.length > 0 || diagnosticsLoading) return
+    void runDiagnostics()
+  }, [diagnosticsLoading, diagnosticsResults.length, runDiagnostics, showDiagnosticsModal])
 
   const refreshGroups = useCallback(async () => {
     if (!user?.id) {
@@ -1818,6 +1903,13 @@ function App() {
             >
               Support
             </button>
+            <button
+              type="button"
+              className="ghostBtn"
+              onClick={() => setShowDiagnosticsModal(true)}
+            >
+              Diagnostics
+            </button>
             {isPlatformAdmin && (
               <button
                 type="button"
@@ -2295,6 +2387,79 @@ function App() {
             {allGroupsReview.length === 0 && (
               <p className="muted groupNotice">No groups available yet.</p>
             )}
+          </div>
+        </div>
+      )}
+
+      {showSupportModal && (
+        <div className="modalBackdrop" onClick={() => setShowSupportModal(false)}>
+          <div className="supportModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Support</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowSupportModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <ul className="supportList">
+              <li>If backend is disconnected, start backend at port 8080 and refresh this page.</li>
+              <li>If sign-in fails, confirm Google client ID is set in frontend and backend .env files.</li>
+              <li>If you changed account permissions, sign out and sign in again to refresh your session token.</li>
+              <li>Use Diagnostics to quickly verify health and route protection before team testing.</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {showDiagnosticsModal && (
+        <div className="modalBackdrop" onClick={() => setShowDiagnosticsModal(false)}>
+          <div className="supportModal diagnosticsModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Quick diagnostics</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowDiagnosticsModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <p className="muted diagnosticsIntro">
+              Use this before multi-user tests to confirm backend health and auth protection.
+            </p>
+
+            <div className="diagnosticsActions">
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => void runDiagnostics()}
+                disabled={diagnosticsLoading}
+              >
+                {diagnosticsLoading ? 'Running checks...' : 'Run checks again'}
+              </button>
+              {diagnosticsLastRunAt && (
+                <span className="muted diagnosticsTimestamp">Last run: {diagnosticsLastRunAt}</span>
+              )}
+            </div>
+
+            <ul className="diagnosticsList" aria-live="polite">
+              {diagnosticsResults.map((result) => {
+                const statusClass = result.passed
+                  ? 'diagnosticsStatusPass'
+                  : result.severity === 'warning'
+                    ? 'diagnosticsStatusWarn'
+                    : 'diagnosticsStatusFail'
+
+                return (
+                  <li key={result.label} className="diagnosticsItem">
+                    <div className="diagnosticsItemTop">
+                      <span className="diagnosticsLabel">{result.label}</span>
+                      <span className={`diagnosticsStatus ${statusClass}`}>
+                        {result.passed ? 'Pass' : result.severity === 'warning' ? 'Warning' : 'Fail'}
+                      </span>
+                    </div>
+                    <p className="diagnosticsDetail">{result.detail}</p>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
         </div>
       )}
