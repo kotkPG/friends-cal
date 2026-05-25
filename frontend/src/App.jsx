@@ -327,25 +327,45 @@ function App() {
     return new Promise((resolve) => {
       let resolved = false
       let callbackFired = false
+      setCalendarLoading(true)
 
       const timeoutId = setTimeout(() => {
         if (!resolved) {
           resolved = true
           setCalendarLoading(false)
-          const msg = callbackFired 
-            ? 'Google authentication callback error.' 
-            : 'Google authentication timed out (30s). Check if popup was blocked or try refreshing the page.'
+          const msg = callbackFired
+            ? 'Google authentication callback error. Please try connecting calendar again.'
+            : 'Google authentication timed out (90s). Allow popups for this site, complete Google consent, then try again.'
           setCalendarError(msg)
           console.error('Google auth timeout', { callbackFired, clientId })
           resolve(false)
         }
-      }, 30000) // 30 second timeout
+      }, 90000) // 90 second timeout for consent flows
 
       try {
         const tokenClient = window.google.accounts.oauth2.initTokenClient({
           client_id: clientId,
           scope: 'https://www.googleapis.com/auth/calendar.readonly',
           prompt: 'consent',
+          login_hint: user?.email || undefined,
+          error_callback: (err) => {
+            if (resolved) return
+            resolved = true
+            clearTimeout(timeoutId)
+            setCalendarLoading(false)
+
+            const reason = String(err?.type || '').toLowerCase()
+            if (reason === 'popup_failed_to_open') {
+              setCalendarError('Popup blocked by browser. Please allow popups for this site and try again.')
+            } else if (reason === 'popup_closed') {
+              setCalendarError('Google popup was closed before approval. Please try again and complete consent.')
+            } else {
+              setCalendarError('Google authentication could not start. Please try again.')
+            }
+
+            console.error('Google OAuth popup error:', err)
+            resolve(false)
+          },
           callback: async (tokenResponse) => {
             callbackFired = true
             console.log('🔵 Callback fired!', { hasError: !!tokenResponse.error })
@@ -404,7 +424,7 @@ function App() {
         resolve(false)
       }
     })
-  }, [apiBase, googleClientId, loadCalendarsForToken])
+  }, [apiBase, googleClientId, loadCalendarsForToken, user?.email])
 
   useEffect(() => {
     const rawUser = localStorage.getItem(STORAGE_USER_KEY)
@@ -1345,15 +1365,24 @@ function App() {
   }, [findBusyBlocks, accessToken, calendars.length, activeGroupId])
 
   const joinedGroupBusyBlocks = useMemo(() => {
+    const joinedUserIds = new Set(
+      members
+        .map((m) => String(m.userId || '').trim())
+        .filter(Boolean),
+    )
     const joinedEmails = new Set(
       members
-        .map((m) => String(m.email || '').toLowerCase())
+        .map((m) => String(m.email || '').trim().toLowerCase())
         .filter(Boolean),
     )
 
-    return groupBusyBlocks.filter((m) =>
-      joinedEmails.has(String(m.userEmail || '').toLowerCase()),
-    )
+    return groupBusyBlocks.filter((m) => {
+      const memberUserId = String(m.userId || '').trim()
+      if (memberUserId && joinedUserIds.has(memberUserId)) return true
+
+      const memberEmail = String(m.userEmail || '').trim().toLowerCase()
+      return Boolean(memberEmail) && joinedEmails.has(memberEmail)
+    })
   }, [groupBusyBlocks, members])
 
   const availabilityData = useMemo(() => {
@@ -1384,9 +1413,9 @@ function App() {
     // Group members' stored busy blocks
     // Exclude users deselected in trip filters
     const activeGroupBlocks = joinedGroupBusyBlocks.filter((m) => {
-      const memberEmail = String(m.userEmail || '').trim().toLowerCase()
-      if (!memberEmail) return false
-      return !excludedUsers.has(memberEmail)
+      const memberKey = String(m.userId || m.userEmail || '').trim().toLowerCase()
+      if (!memberKey) return false
+      return !excludedUsers.has(memberKey)
     })
     const groupBlockingRanges = activeGroupBlocks.flatMap((member) => {
       const memberDecisions = groupDecisionsByUserId[String(member.userId)] || {}
@@ -2812,24 +2841,27 @@ function App() {
                   <span>{user?.email || 'You'} (you)</span>
                 </label>
                 {joinedGroupBusyBlocks.map((m) => {
-                  const memberEmail = String(m.userEmail || '').trim().toLowerCase()
-                  if (!memberEmail) return null
+                  const memberKey = String(m.userId || m.userEmail || '').trim().toLowerCase()
+                  if (!memberKey) return null
+                  const memberLabel = String(m.userEmail || '').trim().toLowerCase()
+                    || String(m.userName || '').trim()
+                    || `user ${String(m.userId || '').trim()}`
 
                   return (
-                    <label key={m.userId || memberEmail} className="tripUserFilterItem">
+                    <label key={m.userId || memberKey} className="tripUserFilterItem">
                       <input
                         type="checkbox"
-                        checked={!excludedUsers.has(memberEmail)}
+                        checked={!excludedUsers.has(memberKey)}
                         onChange={(e) => {
                           setExcludedUsers((prev) => {
                             const next = new Set(prev)
-                            if (e.target.checked) next.delete(memberEmail)
-                            else next.add(memberEmail)
+                            if (e.target.checked) next.delete(memberKey)
+                            else next.add(memberKey)
                             return next
                           })
                         }}
                       />
-                      <span>{memberEmail}</span>
+                      <span>{memberLabel}</span>
                     </label>
                   )
                 })}

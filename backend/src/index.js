@@ -986,13 +986,16 @@ app.get('/api/calendar/group-busy-blocks', requireAuth, (req, res) => {
   const members = Object.entries(store)
     .filter(([uid]) => allowedUserIds.has(String(uid)))
     .filter(([uid]) => !excludeUserId || uid !== String(excludeUserId))
-    .map(([uid, data]) => ({
-      userId: uid,
-      userName: data.userName || '',
-      userEmail: data.userEmail || '',
-      updatedAt: data.updatedAt || '',
-      blocks: data.blocks || [],
-    }));
+    .map(([uid, data]) => {
+      const profile = group.members?.[String(uid)] || {};
+      return {
+        userId: uid,
+        userName: data.userName || profile.name || '',
+        userEmail: data.userEmail || profile.email || '',
+        updatedAt: data.updatedAt || '',
+        blocks: data.blocks || [],
+      };
+    });
   return res.json({ members });
 });
 
