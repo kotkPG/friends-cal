@@ -302,7 +302,8 @@ function App() {
   )
 
   // Request calendar access and load calendars.
-  const connectCalendar = useCallback(() => {
+  const connectCalendar = useCallback((options = {}) => {
+    const loginHint = String(options.loginHint || user?.email || '').trim()
     const clientId = googleClientId
 
     if (!clientId) {
@@ -346,8 +347,8 @@ function App() {
         const tokenClient = window.google.accounts.oauth2.initTokenClient({
           client_id: clientId,
           scope: 'https://www.googleapis.com/auth/calendar.readonly',
-          prompt: 'consent',
-          login_hint: user?.email || undefined,
+          prompt: 'consent select_account',
+          login_hint: loginHint || undefined,
           error_callback: (err) => {
             if (resolved) return
             resolved = true
@@ -548,7 +549,9 @@ function App() {
             setServerMessage('Signed in. Connecting your calendar...')
             setIsAutoConnecting(true)
 
-            const connected = await connectCalendar()
+            const connected = await connectCalendar({
+              loginHint: verifyData?.user?.email,
+            })
             setServerMessage(
               connected
                 ? 'Signed in and calendar connected.'
