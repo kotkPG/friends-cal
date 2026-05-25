@@ -921,7 +921,7 @@ function App() {
     } catch (_err) {
       return []
     }
-  }, [apiBase, user?.id])
+  }, [apiBase, authHeaders, user?.id])
 
   const refreshMembers = useCallback(async () => {
     if (!activeGroupId) {
@@ -940,7 +940,7 @@ function App() {
     } catch (_err) {
       // non-blocking
     }
-  }, [activeGroupId, apiBase])
+  }, [activeGroupId, apiBase, authHeaders])
 
   useEffect(() => {
     if (!user?.id) {
