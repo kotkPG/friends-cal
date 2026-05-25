@@ -70,6 +70,16 @@ h1 {
   border-color: rgba(227, 241, 255, 0.9);
 }
 
+.adminEntryBtn {
+  opacity: 0.7;
+  font-size: 0.72rem;
+  padding: 6px 10px;
+}
+
+.adminEntryBtn:hover {
+  opacity: 1;
+}
+
 .heroNotice {
   margin: 12px 0 0;
   font-size: 0.85rem;
@@ -130,8 +140,108 @@ h1 {
   letter-spacing: -0.01em;
 }
 
+.sectionIntro {
+  margin-top: -2px;
+}
+
+.quickFlowCard {
+  padding-top: 16px;
+}
+
+.quickFlowHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.quickFlowHeader h2 {
+  margin-bottom: 0;
+}
+
+.quickFlowIntro {
+  margin: 8px 0 12px;
+}
+
+.quickFlowSteps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.quickFlowStep {
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.quickFlowStepDone {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.quickFlowStepLabel {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.quickFlowStepHelp {
+  margin: 4px 0 8px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.quickFlowStepState {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+.quickFlowStepStateDone {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
 .muted {
   color: var(--muted);
+}
+
+.privacyNotice {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #f3d7a1;
+  background: #fff8ec;
+  color: #5b4220;
+}
+
+.privacyNotice p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.privacyNotice p + p {
+  margin-top: 8px;
+}
+
+.privacyNotice ul {
+  margin: 10px 0 0;
+  padding-left: 20px;
+}
+
+.privacyNotice li + li {
+  margin-top: 6px;
 }
 
 #googleSignInButton {
@@ -206,6 +316,41 @@ code {
   margin-top: 10px;
 }
 
+.privacyExitRow {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff5f5;
+  max-width: 620px;
+}
+
+.privacyExitText {
+  margin: 0 0 8px;
+  font-size: 0.84rem;
+  color: #7f1d1d;
+}
+
+.privacyExitBtn {
+  border: 1px solid #fca5a5;
+  background: #fee2e2;
+  color: #991b1b;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.privacyExitBtn:hover:not(:disabled) {
+  background: #fecaca;
+}
+
+.privacyExitBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .calendarList {
   display: flex;
   flex-direction: column;
@@ -230,6 +375,313 @@ code {
 /* ── Group roster panel ───────────────────────────────────────────── */
 .groupRosterCard h2 {
   margin-bottom: 4px;
+}
+
+.groupSetupGrid {
+  margin: 12px 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  max-width: 720px;
+}
+
+.groupCompactActions {
+  margin: 10px 0;
+  max-width: 760px;
+  display: grid;
+  gap: 8px;
+}
+
+.groupActionSwitch {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.groupModeBtn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #475569;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.groupModeBtnActive {
+  background: #ecfeff;
+  border-color: #67e8f9;
+  color: #155e75;
+}
+
+.groupInlineFormCompact {
+  max-width: 560px;
+}
+
+.groupSetupCard {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.groupSetupTitle {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+}
+
+.groupInlineForm {
+  display: flex;
+  gap: 8px;
+}
+
+.groupInlineForm input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  background: #fff;
+}
+
+.groupPickerRow {
+  margin: 12px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: 720px;
+}
+
+.groupPickerDense {
+  margin: 0;
+  max-width: none;
+}
+
+.groupSummaryPanel {
+  margin: 10px 0 6px;
+  max-width: 820px;
+  border: 1px solid #dbe3ee;
+  background: #f8fbff;
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.groupTopRow {
+  margin: 10px 0 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 12px;
+  align-items: start;
+  max-width: 1180px;
+}
+
+.groupTopRow .groupSummaryPanel {
+  margin: 0;
+  max-width: none;
+}
+
+.groupMembersSide {
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px;
+  min-width: 0;
+}
+
+.groupMembersSideHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.groupMembersSide .groupRosterHeading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.groupRosterHint {
+  margin: 6px 0 4px;
+  font-size: 0.84rem;
+}
+
+.groupMembersSide .joinedBadge {
+  margin: 0;
+  font-size: 0.75rem;
+  padding: 3px 10px;
+}
+
+.rosterListCompact {
+  margin-top: 10px;
+  max-height: 340px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.rosterListCompact .rosterItem {
+  align-items: flex-start;
+}
+
+.groupFactsRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.groupFactPill {
+  border: 1px solid #dbe3ee;
+  background: #fff;
+  color: #334155;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.groupFactPillInvite {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.groupPickerRow label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.groupPickerRow select {
+  min-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: #fff;
+}
+
+.groupNotice {
+  margin: 4px 0 8px;
+}
+
+.inviteCodeCard {
+  margin: 12px 0;
+  border: 1px solid #d8e3f0;
+  background: #f8fbff;
+  border-radius: 10px;
+  padding: 10px;
+  max-width: 420px;
+}
+
+.platformAdminCard {
+  margin: 12px 0;
+  border: 1px solid #dbe3ee;
+  background: #f8fbff;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.platformReviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.platformSearchRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.platformSearchRow input,
+.platformSearchRow select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 0.9rem;
+  background: #fff;
+  min-width: 0;
+}
+
+.platformSelectedGroupCard {
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.platformGroupActions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.platformGroupsList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.platformGroupsItem {
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 10px;
+}
+
+.platformGroupName {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.platformGroupsItem .muted {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.platformAdminGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) auto;
+}
+
+.platformAdminGrid input,
+.platformAdminGrid select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 0.9rem;
+  background: #fff;
+  min-width: 0;
+}
+
+.inviteCodeValue {
+  margin: 0 0 8px;
+  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.groupRosterHeading {
+  margin: 14px 0 6px;
+  font-size: 1rem;
 }
 
 .rosterList {
@@ -317,60 +769,119 @@ code {
 
 .joinedBadge {
   margin: 10px 0 4px;
-
-  .leaveGroupBtn {
-    font-size: 12px;
-    padding: 3px 10px;
-    border-radius: 20px;
-    border: 1px solid #fca5a5;
-    background: #fff1f1;
-    color: #b42318;
-    cursor: pointer;
-    flex-shrink: 0;
-    margin-left: 4px;
-  }
-  .leaveGroupBtn:hover {
-    background: #fee2e2;
-  }
-
-  .tripUserFilter {
-    margin-top: 14px;
-  }
-
-  .tripUserFilterLabel {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--ink);
-    margin-bottom: 8px;
-  }
-
-  .tripUserFilterList {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .tripUserFilterItem {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--ink);
-    cursor: pointer;
-  }
-
-  .tripUserFilterItem input[type="checkbox"] {
-    width: 15px;
-    height: 15px;
-    flex-shrink: 0;
-    cursor: pointer;
-  }
-
-  .tripUserFilterItem input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
   display: inline-block;
+}
+
+.roleHelpText {
+  margin-top: 6px;
+}
+
+.rolePill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.rolePillAdmin {
+  background: #ecfdf3;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+
+.rolePillMember {
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+.rosterAdminActions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.roleActionBtn,
+.removeMemberBtn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  color: #334155;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.roleActionBtn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.removeMemberBtn {
+  border-color: #fca5a5;
+  background: #fff1f1;
+  color: #b42318;
+}
+
+.removeMemberBtn:hover {
+  background: #fee2e2;
+}
+
+.leaveGroupBtn {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid #fca5a5;
+  background: #fff1f1;
+  color: #b42318;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.leaveGroupBtn:hover {
+  background: #fee2e2;
+}
+
+.tripUserFilter {
+  margin-top: 14px;
+}
+
+.tripUserFilterLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.tripUserFilterList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tripUserFilterItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.tripUserFilterItem input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.tripUserFilterItem input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .calendarSettingsDisclosure {
@@ -942,6 +1453,43 @@ code {
   align-items: start;
 }
 
+.proposalBar {
+  margin: 10px 0 14px;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.proposalBarTitle {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.proposalBarText {
+  margin: 3px 0 0;
+  font-size: 0.82rem;
+}
+
+.proposalBarActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.proposalBtn {
+  margin-top: 0;
+  padding: 8px 14px;
+  font-size: 0.84rem;
+}
+
 .calendarColumn {
   display: grid;
   gap: 16px;
@@ -951,6 +1499,7 @@ code {
   position: sticky;
   top: 12px;
   margin-left: 6px;
+  min-width: 0;
 }
 
 .monthSection h3 {
@@ -1042,6 +1591,16 @@ code {
   box-shadow: 0 0 0 2px #0f766e inset;
 }
 
+.dayCard.isProposalInRange {
+  background: #ecfeff;
+  border-color: #a5f3fc;
+}
+
+.dayCard.isProposalStart,
+.dayCard.isProposalEnd {
+  box-shadow: 0 0 0 2px #0284c7 inset;
+}
+
 .dayTitle {
   font-weight: 600;
   font-size: 0.95rem;
@@ -1100,11 +1659,129 @@ code {
   border-radius: 10px;
   padding: 12px;
   background: #fff;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .dayDetailsPanel h3 {
   margin: 0 0 8px;
   font-size: 1rem;
+}
+
+.appointmentGroups {
+  display: grid;
+  gap: 10px;
+}
+
+.appointmentSection {
+  display: grid;
+  gap: 8px;
+}
+
+.appointmentSectionOwn {
+  padding: 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.appointmentSectionOthers {
+  padding: 8px;
+  border: 1px solid #f3d7a1;
+  border-radius: 10px;
+  background: #fffaf1;
+}
+
+.appointmentSectionTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+}
+
+.appointmentGroup {
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  padding: 8px;
+  background: #fff;
+}
+
+.appointmentGroupOther {
+  border-color: #f6c7c3;
+  background: #fff7f7;
+}
+
+.appointmentGroupEmail {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #475569;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.appointmentList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.appointmentItem {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 7px 9px;
+  background: #fff;
+  min-width: 0;
+}
+
+.appointmentItemOther {
+  border-color: #f5b6b0;
+  background: #fff2f2;
+}
+
+.otherUserStatusLine {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+.otherUserStatusFree {
+  color: #065f46;
+  background: #d1fae5;
+  border: 1px solid #86efac;
+}
+
+.otherUserStatusUnavailable {
+  color: #991b1b;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+}
+
+.otherUserStatusMixed {
+  color: #854d0e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+}
+
+.appointmentSubject {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.appointmentDecisionRow {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .dayDetailsTitle {
@@ -1152,6 +1829,72 @@ code {
   padding: 18px 18px 14px;
 }
 
+.adminModal {
+  width: min(820px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.proposalModal {
+  width: min(760px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.proposalMetaLine {
+  margin: 0 0 8px;
+}
+
+.proposalFieldLabel {
+  margin: 8px 0 4px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #334155;
+  display: block;
+}
+
+.proposalInput,
+.proposalTextarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  background: #fff;
+  color: #0f172a;
+  box-sizing: border-box;
+}
+
+.proposalTextarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.proposalActionsRow {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.proposalSendBtn {
+  margin-top: 0;
+}
+
+.supportModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.supportModalHeader h3 {
+  margin: 0;
+  font-family: 'Fraunces', Georgia, serif;
+}
+
 .supportHeader {
   display: flex;
   align-items: center;
@@ -1186,6 +1929,10 @@ code {
 }
 
 @media (max-width: 640px) {
+  .groupTopRow {
+    grid-template-columns: 1fr;
+  }
+
   .availabilityLayout {
     grid-template-columns: 1fr;
   }

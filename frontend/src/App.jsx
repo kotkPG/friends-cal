@@ -4,6 +4,7 @@ import './App.css'
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const STORAGE_USER_KEY = 'friends-cal.user'
 const STORAGE_TOKEN_KEY = 'friends-cal.token'
+const STORAGE_ID_TOKEN_KEY = 'friends-cal.id-token'
 
 function getLocalDayKey(date) {
   const year = date.getFullYear()
@@ -15,6 +16,22 @@ function getLocalDayKey(date) {
 function parseLocalDayKey(dayKey) {
   const [year, month, day] = String(dayKey).split('-').map(Number)
   return new Date(year, (month || 1) - 1, day || 1)
+}
+
+function getDayKeysBetween(startKey, endKey) {
+  if (!startKey || !endKey) return []
+
+  const start = parseLocalDayKey(startKey)
+  const end = parseLocalDayKey(endKey)
+  const keys = []
+
+  const cursor = new Date(start)
+  while (cursor.getTime() <= end.getTime()) {
+    keys.push(getLocalDayKey(cursor))
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  return keys
 }
 
 function parseEventRange(block) {
@@ -80,6 +97,11 @@ function getInitials(value) {
   return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase()
 }
 
+function isValidEmail(value) {
+  const email = String(value || '').trim().toLowerCase()
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
 function App() {
   const apiBase = useMemo(
     () => import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080',
@@ -88,6 +110,7 @@ function App() {
   const [health, setHealth] = useState('Checking backend...')
   const [serverMessage, setServerMessage] = useState('')
   const [user, setUser] = useState(null)
+  const [idToken, setIdToken] = useState(() => localStorage.getItem(STORAGE_ID_TOKEN_KEY) || '')
   const [googleClientId, setGoogleClientId] = useState(
     () => import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
   )
@@ -106,22 +129,125 @@ function App() {
   const [requiredDays, setRequiredDays] = useState(2)
   const [includeWeekends, setIncludeWeekends] = useState(true)
   const [selectedDayKey, setSelectedDayKey] = useState(null)
+  const [proposalStartKey, setProposalStartKey] = useState('')
+  const [proposalEndKey, setProposalEndKey] = useState('')
+  const [showProposalModal, setShowProposalModal] = useState(false)
+  const [proposalExtraRecipients, setProposalExtraRecipients] = useState('')
+  const [proposalNotice, setProposalNotice] = useState('')
   const [titleDecisions, setTitleDecisions] = useState({})
+  const [groupDecisionsByUserId, setGroupDecisionsByUserId] = useState({})
   const [showDecidedEvents, setShowDecidedEvents] = useState(false)
   const [calendarModesLoaded, setCalendarModesLoaded] = useState(false)
   const [isAutoConnecting, setIsAutoConnecting] = useState(false)
   const [showSupportModal, setShowSupportModal] = useState(false)
+  const [showPlatformAdminModal, setShowPlatformAdminModal] = useState(false)
+  const [privacyExitLoading, setPrivacyExitLoading] = useState(false)
+  const [privacyExitNotice, setPrivacyExitNotice] = useState('')
   const [shareStatus, setShareStatus] = useState('')
   const [members, setMembers] = useState([])
   const [groupBusyBlocks, setGroupBusyBlocks] = useState([])
+  const [groups, setGroups] = useState([])
+  const [activeGroupId, setActiveGroupId] = useState('')
+  const [groupEntryMode, setGroupEntryMode] = useState('create')
+  const [groupNameInput, setGroupNameInput] = useState('')
+  const [inviteCodeInput, setInviteCodeInput] = useState('')
+  const [groupNotice, setGroupNotice] = useState('')
+  const [groupActionLoading, setGroupActionLoading] = useState(false)
+  const [platformAdminEmails, setPlatformAdminEmails] = useState(
+    () => String(import.meta.env.VITE_PLATFORM_ADMIN_EMAILS || '')
+      .split(',')
+      .map((email) => String(email).trim().toLowerCase())
+      .filter(Boolean),
+  )
+  const [platformAssignEmail, setPlatformAssignEmail] = useState('')
+  const [platformAssignGroupId, setPlatformAssignGroupId] = useState('')
+  const [platformAssignRole, setPlatformAssignRole] = useState('member')
+  const [platformAssignNotice, setPlatformAssignNotice] = useState('')
+  const [platformAssignLoading, setPlatformAssignLoading] = useState(false)
+  const [platformGroupSearch, setPlatformGroupSearch] = useState('')
+  const [platformSelectedGroupId, setPlatformSelectedGroupId] = useState('')
+  const [allGroupsReview, setAllGroupsReview] = useState([])
+  const [allGroupsReviewLoading, setAllGroupsReviewLoading] = useState(false)
+  const [allGroupsReviewNotice, setAllGroupsReviewNotice] = useState('')
+  const [deleteGroupLoading, setDeleteGroupLoading] = useState(false)
   const [joinLoading, setJoinLoading] = useState(false)
-  const hasJoined = members.some((m) => m.email === user?.email)
-    const [excludedUsers, setExcludedUsers] = useState(new Set())
-    const [leaveLoading, setLeaveLoading] = useState(false)
+  const [excludedUsers, setExcludedUsers] = useState(new Set())
+  const [leaveLoading, setLeaveLoading] = useState(false)
+  const [memberActionLoadingId, setMemberActionLoadingId] = useState('')
+  const [memberActionError, setMemberActionError] = useState('')
+  const hasJoined = members.some((m) => m.userId === user?.id || m.email === user?.email)
+  const activeGroup = useMemo(
+    () => groups.find((group) => group.id === activeGroupId) || null,
+    [groups, activeGroupId],
+  )
+  const currentMember = useMemo(
+    () => members.find((m) => m.userId === user?.id || m.email === user?.email) || null,
+    [members, user?.id, user?.email],
+  )
+  const isCurrentUserAdmin = currentMember?.role === 'admin'
+  const isPlatformAdmin = useMemo(() => {
+    const email = String(user?.email || '').trim().toLowerCase()
+    if (!email) return false
+    return platformAdminEmails.includes(email)
+  }, [platformAdminEmails, user?.email])
+  const canDeleteActiveGroup = Boolean(activeGroupId) && (isCurrentUserAdmin || isPlatformAdmin)
+  const filteredPlatformGroups = useMemo(() => {
+    const query = platformGroupSearch.trim().toLowerCase()
+    if (!query) return allGroupsReview
+    return allGroupsReview.filter((group) => {
+      const name = String(group.name || '').toLowerCase()
+      const id = String(group.id || '').toLowerCase()
+      return name.includes(query) || id.includes(query)
+    })
+  }, [allGroupsReview, platformGroupSearch])
+  const selectedPlatformGroup = useMemo(
+    () => allGroupsReview.find((group) => group.id === platformSelectedGroupId) || null,
+    [allGroupsReview, platformSelectedGroupId],
+  )
   const connectedUserInitial = useMemo(
     () => getInitials(user?.name || user?.email || ''),
     [user?.name, user?.email],
   )
+  const onboardingSteps = useMemo(() => {
+    const hasGroup = Boolean(activeGroupId)
+    const hasCalendars = calendars.length > 0
+    const hasBusyData = Boolean(busyBlocks)
+    const hasIndividualChoices = Object.values(calendarModes).some((mode) => mode === 'individual')
+
+    return [
+      {
+        id: 'signin',
+        label: '1. Sign in',
+        help: 'Connect your account safely.',
+        done: Boolean(user),
+      },
+      {
+        id: 'group',
+        label: '2. Pick group',
+        help: 'Create one or join with invite code.',
+        done: Boolean(user) && hasGroup,
+      },
+      {
+        id: 'calendar',
+        label: '3. Calendar setup',
+        help: 'Choose free / busy / individual per calendar.',
+        done: Boolean(user) && hasCalendars,
+      },
+      {
+        id: 'events',
+        label: '4. Flexible events',
+        help: 'Mark recurring events free or unavailable.',
+        done: Boolean(user) && (!hasIndividualChoices || hasBusyData),
+      },
+      {
+        id: 'plan',
+        label: '5. Find best days',
+        help: 'Use filters and click any day for details.',
+        done: Boolean(user) && hasBusyData,
+      },
+    ]
+  }, [activeGroupId, busyBlocks, calendarModes, calendars.length, user])
+  const completedStepCount = onboardingSteps.filter((step) => step.done).length
   const calendarWindow = useMemo(() => {
     const start = new Date()
     start.setHours(0, 0, 0, 0)
@@ -134,6 +260,16 @@ function App() {
 
     return { start, end, daysCount }
   }, [])
+  const authHeaders = useCallback(
+    (headers = {}) => {
+      if (!idToken) return { ...headers }
+      return {
+        ...headers,
+        Authorization: `Bearer ${idToken}`,
+      }
+    },
+    [idToken],
+  )
 
   const loadCalendarsForToken = useCallback(
     async (token) => {
@@ -269,11 +405,19 @@ function App() {
   useEffect(() => {
     const rawUser = localStorage.getItem(STORAGE_USER_KEY)
     const savedToken = localStorage.getItem(STORAGE_TOKEN_KEY)
+    const savedIdToken = localStorage.getItem(STORAGE_ID_TOKEN_KEY)
+
+    if (savedIdToken && !idToken) {
+      setIdToken(savedIdToken)
+    }
 
     if (rawUser) {
       try {
         const parsedUser = JSON.parse(rawUser)
-        if (parsedUser?.id && !user) {
+        if (parsedUser?.id && !savedIdToken) {
+          localStorage.removeItem(STORAGE_USER_KEY)
+          setServerMessage('Please sign in again to continue securely.')
+        } else if (parsedUser?.id && !user) {
           setUser(parsedUser)
         }
       } catch (_err) {
@@ -301,7 +445,7 @@ function App() {
     }
 
     void restoreCalendars()
-  }, [accessToken, loadCalendarsForToken, user])
+  }, [accessToken, idToken, loadCalendarsForToken, user])
 
   useEffect(() => {
     async function checkHealth() {
@@ -318,14 +462,19 @@ function App() {
   }, [apiBase])
 
   useEffect(() => {
-    if (googleClientId) return
-
     async function loadRuntimeConfig() {
       try {
         const response = await fetch(`${apiBase}/api/config`)
         const data = await response.json()
-        if (data?.googleClientId) {
+        if (!googleClientId && data?.googleClientId) {
           setGoogleClientId(data.googleClientId)
+        }
+        if (Array.isArray(data?.platformAdminEmails)) {
+          setPlatformAdminEmails(
+            data.platformAdminEmails
+              .map((email) => String(email || '').trim().toLowerCase())
+              .filter(Boolean),
+          )
         }
       } catch (_error) {
         // non-blocking; frontend env var may still provide the client id
@@ -370,6 +519,8 @@ function App() {
 
             setUser(verifyData.user)
             localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(verifyData.user))
+            setIdToken(response.credential)
+            localStorage.setItem(STORAGE_ID_TOKEN_KEY, response.credential)
             setServerMessage('Signed in. Connecting your calendar...')
             setIsAutoConnecting(true)
 
@@ -413,6 +564,7 @@ function App() {
       try {
         const res = await fetch(
           `${apiBase}/api/calendar-modes?userId=${encodeURIComponent(user.id)}`,
+          { headers: authHeaders() },
         )
         const data = await res.json()
         const savedModes = data.calendarModes || {}
@@ -444,7 +596,7 @@ function App() {
       try {
         await fetch(`${apiBase}/api/calendar-modes`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             userId: user.id,
             calendarModes: currentModes,
@@ -462,20 +614,13 @@ function App() {
     setCalendarModes((prev) => ({ ...prev, [calendarId]: mode }))
   }, [])
 
-  const toggleEventOverride = useCallback((eventId) => {
-    setEventOverrides((prev) => ({
-      ...prev,
-      [eventId]: prev[eventId] === 'free' ? 'unavailable' : 'free',
-    }))
-  }, [])
-
   const saveTitleDecision = useCallback(
     async (normalizedTitle, decision) => {
       if (!user?.id) return
       try {
         await fetch(`${apiBase}/api/decisions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             userId: user.id,
             titleDecisions: { [normalizedTitle]: decision },
@@ -487,6 +632,26 @@ function App() {
     },
     [apiBase, user?.id],
   )
+
+  const setEventAvailability = useCallback((eventId, status, normalizedTitle = '') => {
+    if (!eventId) return
+    if (status !== 'free' && status !== 'unavailable') return
+    setEventOverrides((prev) => ({
+      ...prev,
+      [eventId]: status,
+    }))
+
+    if (normalizedTitle) {
+      void saveTitleDecision(normalizedTitle, status)
+    }
+  }, [saveTitleDecision])
+
+  const toggleEventOverride = useCallback((eventId) => {
+    setEventOverrides((prev) => ({
+      ...prev,
+      [eventId]: prev[eventId] === 'free' ? 'unavailable' : 'free',
+    }))
+  }, [])
 
   const setGroupDecision = useCallback(
     (normalizedTitle, decision, groupEvents) => {
@@ -511,6 +676,89 @@ function App() {
     }
   }, [])
 
+  const resetLocalSession = useCallback(() => {
+    localStorage.removeItem(STORAGE_USER_KEY)
+    localStorage.removeItem(STORAGE_TOKEN_KEY)
+    localStorage.removeItem(STORAGE_ID_TOKEN_KEY)
+    setUser(null)
+    setIdToken('')
+    setAccessToken(null)
+    setCalendars([])
+    setCalendarModes({})
+    setEventOverrides({})
+    setBusyBlocks(null)
+    setGroupBusyBlocks([])
+    setMembers([])
+    setGroups([])
+    setActiveGroupId('')
+    setSelectedDayKey(null)
+    setProposalStartKey('')
+    setProposalEndKey('')
+    setShowProposalModal(false)
+    setServerMessage('Your data was removed. Sign in again only if you want to reconnect.')
+  }, [])
+
+  const revokeGoogleCalendarAccess = useCallback(async (token) => {
+    if (!token) return
+
+    if (window.google?.accounts?.oauth2?.revoke) {
+      await new Promise((resolve) => {
+        window.google.accounts.oauth2.revoke(token, () => resolve())
+      })
+      return
+    }
+
+    try {
+      await fetch('https://oauth2.googleapis.com/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `token=${encodeURIComponent(token)}`,
+      })
+    } catch (_err) {
+      // non-blocking; local session will still be cleared.
+    }
+  }, [])
+
+  const runPrivacyExit = useCallback(async () => {
+    if (!user?.id) return
+
+    const accepted = window.confirm(
+      'This will remove your records from groups and delete your saved calendar data for this app. Continue?',
+    )
+    if (!accepted) return
+
+    setPrivacyExitLoading(true)
+    setPrivacyExitNotice('')
+
+    try {
+      const response = await fetch(`${apiBase}/api/privacy/delete-user-data`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          userId: user.id,
+          userEmail: user.email,
+        }),
+      })
+
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || 'Could not remove your records.')
+      }
+
+      await revokeGoogleCalendarAccess(accessToken)
+      if (window.google?.accounts?.id?.disableAutoSelect) {
+        window.google.accounts.id.disableAutoSelect()
+      }
+
+      resetLocalSession()
+      setPrivacyExitNotice('Privacy exit complete. Your records were deleted and calendar access was revoked.')
+    } catch (error) {
+      setPrivacyExitNotice(error.message || 'Privacy exit failed. Please try again.')
+    } finally {
+      setPrivacyExitLoading(false)
+    }
+  }, [accessToken, apiBase, resetLocalSession, revokeGoogleCalendarAccess, user?.email, user?.id])
+
   useEffect(() => {
     if (!shareStatus) return
     const t = setTimeout(() => setShareStatus(''), 3200)
@@ -518,79 +766,429 @@ function App() {
   }, [shareStatus])
 
   useEffect(() => {
+    if (!privacyExitNotice) return
+    const timeoutId = setTimeout(() => setPrivacyExitNotice(''), 4200)
+    return () => clearTimeout(timeoutId)
+  }, [privacyExitNotice])
+
+  useEffect(() => {
     function onKeyDown(e) {
       if (e.key === 'Escape') {
         setShowSupportModal(false)
+        setShowPlatformAdminModal(false)
+        setShowProposalModal(false)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Fetch group members roster on load and whenever user signs in
   useEffect(() => {
-    async function fetchMembers() {
-      try {
-        const res = await fetch(`${apiBase}/api/members`)
-        const data = await res.json()
-        if (res.ok) setMembers(data.members || [])
-      } catch (_err) {
-        // non-blocking
-      }
+    if (!proposalNotice) return
+    const timeoutId = setTimeout(() => setProposalNotice(''), 2600)
+    return () => clearTimeout(timeoutId)
+  }, [proposalNotice])
+
+  const refreshGroups = useCallback(async () => {
+    if (!user?.id) {
+      setGroups([])
+      setActiveGroupId('')
+      return []
     }
-    void fetchMembers()
+
+    try {
+      const res = await fetch(`${apiBase}/api/groups?userId=${encodeURIComponent(user.id)}`, {
+        headers: authHeaders(),
+      })
+      const data = await res.json()
+      if (!res.ok) return []
+
+      const fetched = data.groups || []
+      setGroups(fetched)
+      setActiveGroupId((prev) => {
+        if (prev && fetched.some((group) => group.id === prev)) return prev
+        return fetched[0]?.id || ''
+      })
+      return fetched
+    } catch (_err) {
+      return []
+    }
   }, [apiBase, user?.id])
 
-  const joinGroup = useCallback(async () => {
-    if (!user) return
+  const refreshMembers = useCallback(async () => {
+    if (!activeGroupId) {
+      setMembers([])
+      return
+    }
+
+    try {
+      const res = await fetch(`${apiBase}/api/members?groupId=${encodeURIComponent(activeGroupId)}`, {
+        headers: authHeaders(),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setMembers(data.members || [])
+      }
+    } catch (_err) {
+      // non-blocking
+    }
+  }, [activeGroupId, apiBase])
+
+  useEffect(() => {
+    if (!user?.id) {
+      setGroups([])
+      setActiveGroupId('')
+      setMembers([])
+      return
+    }
+    void refreshGroups()
+  }, [refreshGroups, user?.id])
+
+  useEffect(() => {
+    void refreshMembers()
+  }, [refreshMembers])
+
+  const createGroup = useCallback(async () => {
+    if (!user?.id || !groupNameInput.trim()) return
+    setGroupNotice('')
+    setGroupActionLoading(true)
+    try {
+      const res = await fetch(`${apiBase}/api/groups/create`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          userId: user.id,
+          userName: user.name,
+          email: user.email,
+          picture: user.picture,
+          name: groupNameInput.trim(),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setGroupNotice(data.error || 'Could not create group.')
+        return
+      }
+
+      setGroupNameInput('')
+      const updated = await refreshGroups()
+      if (data.group?.id) {
+        setActiveGroupId(data.group.id)
+      } else if (updated[0]?.id) {
+        setActiveGroupId(updated[0].id)
+      }
+      setGroupNotice('Group created.')
+    } catch (_err) {
+      setGroupNotice('Could not create group right now.')
+    } finally {
+      setGroupActionLoading(false)
+    }
+  }, [apiBase, groupNameInput, refreshGroups, user?.email, user?.id, user?.name, user?.picture])
+
+  const joinGroupByInvite = useCallback(async () => {
+    if (!user?.id || !inviteCodeInput.trim()) return
+    setGroupNotice('')
     setJoinLoading(true)
     try {
-      await fetch(`${apiBase}/api/members/join`, {
+      const res = await fetch(`${apiBase}/api/groups/join-by-invite`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           userId: user.id,
           name: user.name,
           email: user.email,
           picture: user.picture,
+          inviteCode: inviteCodeInput.trim(),
         }),
       })
-      // Refresh roster
-      const res = await fetch(`${apiBase}/api/members`)
       const data = await res.json()
-      if (res.ok) setMembers(data.members || [])
+      if (!res.ok) {
+        setGroupNotice(data.error || 'Could not join group with invite code.')
+        return
+      }
+
+      setInviteCodeInput('')
+      await refreshGroups()
+      if (data.groupId) setActiveGroupId(data.groupId)
+      setGroupNotice('Joined group successfully.')
     } catch (_err) {
-      // non-blocking
+      setGroupNotice('Could not join group right now.')
     } finally {
       setJoinLoading(false)
     }
-  }, [apiBase, user])
+  }, [apiBase, inviteCodeInput, refreshGroups, user?.email, user?.id, user?.name, user?.picture])
+
+  const regenerateInviteCode = useCallback(async () => {
+    if (!user?.id || !activeGroupId) return
+    setGroupActionLoading(true)
+    setGroupNotice('')
+    try {
+      const res = await fetch(`${apiBase}/api/groups/invite`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          groupId: activeGroupId,
+          actorUserId: user.id,
+          regenerate: true,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setGroupNotice(data.error || 'Could not regenerate invite code.')
+        return
+      }
+      await refreshGroups()
+      setGroupNotice('Invite code regenerated.')
+    } catch (_err) {
+      setGroupNotice('Could not regenerate invite code right now.')
+    } finally {
+      setGroupActionLoading(false)
+    }
+  }, [activeGroupId, apiBase, refreshGroups, user?.id])
+
+  const assignUserToGroup = useCallback(async () => {
+    if (!isPlatformAdmin || !user?.email || !platformAssignEmail.trim()) return
+    const targetGroupId = platformSelectedGroupId || platformAssignGroupId || activeGroupId
+    if (!targetGroupId) {
+      setPlatformAssignNotice('Select a target group first.')
+      return
+    }
+
+    setPlatformAssignLoading(true)
+    setPlatformAssignNotice('')
+    try {
+      const res = await fetch(`${apiBase}/api/platform/assign-user-group`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          actorEmail: user.email,
+          targetEmail: platformAssignEmail.trim().toLowerCase(),
+          groupId: targetGroupId,
+          role: platformAssignRole,
+          removeFromOtherGroups: true,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setPlatformAssignNotice(data.error || 'Could not assign user to group.')
+        return
+      }
+
+      setPlatformAssignEmail('')
+      await refreshGroups()
+      setActiveGroupId(targetGroupId)
+      await refreshMembers()
+      setPlatformAssignNotice('User assigned to group.')
+    } catch (_err) {
+      setPlatformAssignNotice('Could not assign user right now.')
+    } finally {
+      setPlatformAssignLoading(false)
+    }
+  }, [
+    activeGroupId,
+    apiBase,
+    isPlatformAdmin,
+    platformAssignEmail,
+    platformAssignGroupId,
+    platformSelectedGroupId,
+    platformAssignRole,
+    refreshGroups,
+    refreshMembers,
+    user?.email,
+  ])
+
+  const refreshAllGroupsReview = useCallback(async () => {
+    if (!isPlatformAdmin || !user?.email) {
+      setAllGroupsReview([])
+      return
+    }
+
+    setAllGroupsReviewLoading(true)
+    setAllGroupsReviewNotice('')
+    try {
+      const res = await fetch(
+        `${apiBase}/api/platform/groups?actorEmail=${encodeURIComponent(user.email)}`,
+        { headers: authHeaders() },
+      )
+      const data = await res.json()
+      if (!res.ok) {
+        setAllGroupsReviewNotice(data.error || 'Could not load groups review.')
+        return
+      }
+      setAllGroupsReview(data.groups || [])
+    } catch (_err) {
+      setAllGroupsReviewNotice('Could not load groups review right now.')
+    } finally {
+      setAllGroupsReviewLoading(false)
+    }
+  }, [apiBase, isPlatformAdmin, user?.email])
+
+  useEffect(() => {
+    if (!isPlatformAdmin) {
+      setAllGroupsReview([])
+      return
+    }
+    void refreshAllGroupsReview()
+  }, [isPlatformAdmin, refreshAllGroupsReview])
+
+  useEffect(() => {
+    setPlatformSelectedGroupId((prev) => {
+      if (prev && allGroupsReview.some((group) => group.id === prev)) return prev
+      return allGroupsReview[0]?.id || ''
+    })
+  }, [allGroupsReview])
+
+  useEffect(() => {
+    setPlatformAssignGroupId(platformSelectedGroupId)
+  }, [platformSelectedGroupId])
+
+  const deleteGroupById = useCallback(async (groupId) => {
+    if (!groupId || !user?.id) return false
+
+    setDeleteGroupLoading(true)
+    setGroupNotice('')
+    try {
+      const res = await fetch(`${apiBase}/api/groups/delete`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          groupId,
+          actorUserId: user.id,
+          actorEmail: user.email,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setGroupNotice(data.error || 'Could not delete group.')
+        return false
+      }
+
+      setGroupNotice('Group deleted.')
+      await refreshGroups()
+      await refreshMembers()
+      if (isPlatformAdmin) {
+        await refreshAllGroupsReview()
+      }
+      return true
+    } catch (_err) {
+      setGroupNotice('Could not delete group right now.')
+      return false
+    } finally {
+      setDeleteGroupLoading(false)
+    }
+  }, [
+    apiBase,
+    isPlatformAdmin,
+    refreshAllGroupsReview,
+    refreshGroups,
+    refreshMembers,
+    user?.email,
+    user?.id,
+  ])
+
+  const deleteActiveGroup = useCallback(async () => {
+    if (!activeGroupId || !user?.id || !canDeleteActiveGroup) return
+    await deleteGroupById(activeGroupId)
+  }, [activeGroupId, canDeleteActiveGroup, deleteGroupById, user?.id])
 
   const leaveGroup = useCallback(async () => {
-    if (!user) return
+    if (!user || !activeGroupId) return
     setLeaveLoading(true)
     try {
       await fetch(`${apiBase}/api/members/leave`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ groupId: activeGroupId, userId: user.id }),
       })
-      const res = await fetch(`${apiBase}/api/members`)
-      const data = await res.json()
-      if (res.ok) setMembers(data.members || [])
+      await refreshGroups()
+      await refreshMembers()
     } catch (_err) {
       // non-blocking
     } finally {
       setLeaveLoading(false)
     }
-  }, [apiBase, user])
+  }, [activeGroupId, apiBase, refreshGroups, refreshMembers, user])
+
+  const updateMemberRole = useCallback(
+    async (targetUserId, role) => {
+      if (!user?.id || !targetUserId || !activeGroupId) return
+
+      const actionKey = `role-${targetUserId}`
+      setMemberActionError('')
+      setMemberActionLoadingId(actionKey)
+
+      try {
+        const res = await fetch(`${apiBase}/api/members/role`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            actorUserId: user.id,
+            groupId: activeGroupId,
+            targetUserId,
+            role,
+          }),
+        })
+
+        const data = await res.json()
+        if (!res.ok) {
+          setMemberActionError(data.error || 'Could not update role.')
+          return
+        }
+
+        await refreshMembers()
+      } catch (_err) {
+        setMemberActionError('Could not update role right now.')
+      } finally {
+        setMemberActionLoadingId('')
+      }
+    },
+    [activeGroupId, apiBase, refreshMembers, user?.id],
+  )
+
+  const removeGroupMember = useCallback(
+    async (targetUserId) => {
+      if (!user?.id || !targetUserId || !activeGroupId) return
+
+      const actionKey = `remove-${targetUserId}`
+      setMemberActionError('')
+      setMemberActionLoadingId(actionKey)
+
+      try {
+        const res = await fetch(`${apiBase}/api/members/remove`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            actorUserId: user.id,
+            groupId: activeGroupId,
+            targetUserId,
+          }),
+        })
+
+        const data = await res.json()
+        if (!res.ok) {
+          setMemberActionError(data.error || 'Could not remove member.')
+          return
+        }
+
+        await refreshMembers()
+      } catch (_err) {
+        setMemberActionError('Could not remove member right now.')
+      } finally {
+        setMemberActionLoadingId('')
+      }
+    },
+    [activeGroupId, apiBase, refreshMembers, user?.id],
+  )
 
   const findBusyBlocks = useCallback(async () => {
-    if (!accessToken || calendars.length === 0) return
+    if (!accessToken || calendars.length === 0 || !activeGroupId) return
     setCalendarLoading(true)
     setBusyBlocks(null)
     setGroupBusyBlocks([])
     setSelectedDayKey(null)
+    setProposalStartKey('')
+    setProposalEndKey('')
+    setShowProposalModal(false)
     setCalendarError('')
 
     try {
@@ -623,7 +1221,8 @@ function App() {
       // Fetch other group members' stored busy blocks
       try {
         const groupRes = await fetch(
-          `${apiBase}/api/calendar/group-busy-blocks?excludeUserId=${encodeURIComponent(user?.id || '')}`,
+          `${apiBase}/api/calendar/group-busy-blocks?groupId=${encodeURIComponent(activeGroupId)}&excludeUserId=${encodeURIComponent(user?.id || '')}`,
+          { headers: authHeaders() },
         )
         if (groupRes.ok) {
           const groupData = await groupRes.json()
@@ -632,17 +1231,33 @@ function App() {
       } catch (_groupErr) {
         // non-blocking — we still show own data
       }
+
+      // Fetch saved free/unavailable decisions for all members in active group.
+      try {
+        const decisionRes = await fetch(
+          `${apiBase}/api/decisions/group?groupId=${encodeURIComponent(activeGroupId)}&requesterUserId=${encodeURIComponent(user?.id || '')}`,
+          { headers: authHeaders() },
+        )
+        if (decisionRes.ok) {
+          const decisionData = await decisionRes.json()
+          setGroupDecisionsByUserId(decisionData.decisionsByUserId || {})
+        } else {
+          setGroupDecisionsByUserId({})
+        }
+      } catch (_decisionErr) {
+        setGroupDecisionsByUserId({})
+      }
     } catch (err) {
       setCalendarError(err.message)
     } finally {
       setCalendarLoading(false)
     }
-  }, [apiBase, accessToken, calendars, tagInput, calendarWindow.daysCount, user?.id, user?.name, user?.email])
+  }, [apiBase, accessToken, calendars, tagInput, calendarWindow.daysCount, user?.id, user?.name, user?.email, activeGroupId])
 
   useEffect(() => {
-    if (!accessToken || calendars.length === 0) return
+    if (!accessToken || calendars.length === 0 || !activeGroupId) return
     void findBusyBlocks()
-  }, [findBusyBlocks, accessToken, calendars.length])
+  }, [findBusyBlocks, accessToken, calendars.length, activeGroupId])
 
   const joinedGroupBusyBlocks = useMemo(() => {
     const joinedEmails = new Set(
@@ -663,11 +1278,15 @@ function App() {
 
     // Determine if a given event effectively blocks the day
     const isBlocking = (event) => {
+      const manual = eventOverrides[event.id]
+      if (manual === 'free') return false
+      if (manual === 'unavailable') return true
+
       const mode = calendarModes[event.calendarId] ?? 'unavailable'
       if (mode === 'free') return false
       if (mode === 'unavailable') return true
       // 'individual': check per-event override; default is blocking
-      return eventOverrides[event.id] !== 'free'
+      return true
     }
 
     // Own blocking events
@@ -677,14 +1296,26 @@ function App() {
       .filter(Boolean)
       .sort((a, b) => a.startMs - b.startMs)
 
-    // Group members' stored busy blocks (always treated as blocking)
+    // Group members' stored busy blocks
     // Exclude users deselected in trip filters
-    const activeGroupBlocks = joinedGroupBusyBlocks.filter(
-      (m) => !excludedUsers.has(m.userEmail),
-    )
-    const groupBlockingRanges = activeGroupBlocks.flatMap((member) =>
-      (member.blocks || []).map(parseEventRange).filter(Boolean),
-    )
+    const activeGroupBlocks = joinedGroupBusyBlocks.filter((m) => {
+      const memberEmail = String(m.userEmail || '').trim().toLowerCase()
+      if (!memberEmail) return false
+      return !excludedUsers.has(memberEmail)
+    })
+    const groupBlockingRanges = activeGroupBlocks.flatMap((member) => {
+      const memberDecisions = groupDecisionsByUserId[String(member.userId)] || {}
+      return (member.blocks || [])
+        .map((event) => {
+          const range = parseEventRange(event)
+          if (!range) return null
+          const normalizedTitle = normalizeTitle(event.title)
+          const decision = memberDecisions[normalizedTitle] === 'free' ? 'free' : 'unavailable'
+          if (decision === 'free') return null
+          return range
+        })
+        .filter(Boolean)
+    })
 
     const allBlockingRanges = [...blockingRanges, ...groupBlockingRanges]
 
@@ -743,7 +1374,10 @@ function App() {
       if (!range) return
 
       const participants = Array.isArray(event.participants) ? event.participants : []
-      const personLabels = participants.map((p) => p.name || p.email).filter(Boolean)
+      const participantEmails = participants
+        .map((p) => String(p?.email || '').trim().toLowerCase())
+        .filter(isValidEmail)
+      const sourceEmail = participantEmails[0] || (isValidEmail(user?.email) ? String(user.email).toLowerCase() : '')
       const blocking = isBlocking(event)
       const calMode = calendarModes[event.calendarId] ?? 'unavailable'
 
@@ -763,7 +1397,8 @@ function App() {
             title: event.title || 'Busy',
             start: event.start,
             end: event.end,
-            people: personLabels,
+            people: participantEmails,
+            sourceEmail,
             isBlocking: blocking,
             isOwn: true,
           })
@@ -774,14 +1409,19 @@ function App() {
     // Process group members' events
     activeGroupBlocks.forEach((member) => {
       const ownerInitial = getInitials(member.userName || member.userEmail)
+      const memberDecisions = groupDecisionsByUserId[String(member.userId)] || {}
       ;(member.blocks || []).forEach((event) => {
         const range = parseEventRange(event)
         if (!range) return
 
+        const normalizedTitle = normalizeTitle(event.title)
+        const decision = memberDecisions[normalizedTitle] === 'free' ? 'free' : 'unavailable'
+        const isBlocking = decision !== 'free'
+
         days.forEach((day) => {
           if (day.dayStartMs < range.endMs && day.dayEndMs > range.startMs) {
             const stat = dayStats.get(day.dayKey)
-            if (!stat.busyOwners.has(member.userEmail)) {
+            if (isBlocking && !stat.busyOwners.has(member.userEmail)) {
               stat.busyOwners.set(member.userEmail, { initial: ownerInitial, isSelf: false })
             }
             stat.events.push({
@@ -792,10 +1432,11 @@ function App() {
               start: event.start,
               end: event.end,
               people: [],
-              isBlocking: true,
+              isBlocking,
               isOwn: false,
+              decision,
               ownerName: member.userName || member.userEmail,
-              ownerEmail: member.userEmail,
+              ownerEmail: isValidEmail(member.userEmail) ? String(member.userEmail).toLowerCase() : '',
             })
           }
         })
@@ -829,7 +1470,7 @@ function App() {
       const startsOnSaturday = new Date(window[0].dayStartMs).getDay() === 6
       const endsOnSunday = new Date(window[window.length - 1].dayStartMs).getDay() === 0
 
-      // Weekend mode is "anchored":
+      // Weekend mode is "weekend-focused":
       // - 1 day: either Saturday or Sunday
       // - 2 days: must include at least one weekend day (Fri-Sat, Sat-Sun, Sun-Mon)
       // - 3+ days: must include both Sat and Sun and either start on Saturday or end on Sunday
@@ -881,6 +1522,8 @@ function App() {
   }, [
     busyBlocks,
     joinedGroupBusyBlocks,
+    groupDecisionsByUserId,
+    excludedUsers,
     calendarWindow,
     requiredDays,
     includeWeekends,
@@ -889,6 +1532,176 @@ function App() {
     connectedUserInitial,
     user?.email,
   ])
+
+  const selectedDay = useMemo(() => {
+    if (!selectedDayKey) return null
+    return availabilityData.dayLookup.get(selectedDayKey) || null
+  }, [availabilityData.dayLookup, selectedDayKey])
+
+  const selectedDayGroupedAppointments = useMemo(() => {
+    if (!selectedDay) return []
+
+    const ownEmail = isValidEmail(user?.email) ? String(user.email).toLowerCase() : ''
+    const ownRows = selectedDay.events.map((event) => ({
+      email: ownEmail,
+      subject: event.title || 'Busy',
+      eventId: event.id,
+      isOther: false,
+    }))
+
+    const otherRows = selectedDay.groupEvents
+      .map((event) => ({
+        email: isValidEmail(event.ownerEmail) ? String(event.ownerEmail).toLowerCase() : '',
+        subject: 'Busy event',
+        decision: event.decision === 'free' ? 'free' : 'unavailable',
+        isOther: true,
+      }))
+      .filter((row) => isValidEmail(row.email))
+
+    const grouped = new Map()
+
+    ;[...ownRows, ...otherRows].forEach((row) => {
+      if (!grouped.has(row.email)) {
+        grouped.set(row.email, {
+          email: row.email,
+          isOther: row.isOther,
+          events: [],
+          freeCount: 0,
+          unavailableCount: 0,
+        })
+      }
+      const bucket = grouped.get(row.email)
+      if (row.isOther) {
+        if (row.decision === 'free') {
+          bucket.freeCount += 1
+        } else {
+          bucket.unavailableCount += 1
+        }
+      } else {
+        bucket.events.push({
+          eventId: row.eventId,
+          subject: row.subject,
+          decision: eventOverrides[row.eventId] === 'free' ? 'free' : 'unavailable',
+        })
+      }
+    })
+
+    return Array.from(grouped.values()).sort((a, b) => {
+      if (a.isOther !== b.isOther) return a.isOther ? 1 : -1
+      return a.email.localeCompare(b.email)
+    })
+  }, [selectedDay, user?.email, eventOverrides])
+
+  const selectedDayOwnGroup = useMemo(
+    () => selectedDayGroupedAppointments.find((group) => !group.isOther) || null,
+    [selectedDayGroupedAppointments],
+  )
+  const selectedDayOtherGroups = useMemo(
+    () => selectedDayGroupedAppointments.filter((group) => group.isOther),
+    [selectedDayGroupedAppointments],
+  )
+  const proposalRangeReady = Boolean(proposalStartKey && proposalEndKey)
+  const proposalRangeSummary = useMemo(() => {
+    if (!proposalStartKey) return null
+
+    const start = parseLocalDayKey(proposalStartKey)
+    const end = parseLocalDayKey(proposalEndKey || proposalStartKey)
+    const startLabel = start.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    const endLabel = end.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+
+    return {
+      startLabel,
+      endLabel,
+      label: proposalStartKey && proposalEndKey
+        ? `${startLabel} - ${endLabel}`
+        : `${startLabel} (start selected)`,
+    }
+  }, [proposalEndKey, proposalStartKey])
+  const proposalAvailabilitySummary = useMemo(() => {
+    if (!proposalRangeReady) return null
+    const keys = getDayKeysBetween(proposalStartKey, proposalEndKey)
+    const days = keys
+      .map((key) => availabilityData.dayLookup.get(key))
+      .filter(Boolean)
+
+    const availableDays = days.filter((day) => day.isFree).length
+    const blockedDays = days.length - availableDays
+
+    const dayLines = days.map((day) => `- ${day.weekday}, ${day.dayLabel}: ${day.isFree ? 'Available' : 'Busy'}`)
+
+    return {
+      keys,
+      days,
+      availableDays,
+      blockedDays,
+      isFullyAvailable: blockedDays === 0,
+      dayLines,
+    }
+  }, [availabilityData.dayLookup, proposalEndKey, proposalRangeReady, proposalStartKey])
+  const groupRecipientEmails = useMemo(() => {
+    return Array.from(
+      new Set(
+        members
+          .map((member) => String(member.email || '').trim().toLowerCase())
+          .filter(isValidEmail),
+      ),
+    )
+  }, [members])
+  const proposalEmailPreview = useMemo(() => {
+    if (!proposalRangeSummary || !proposalAvailabilitySummary) {
+      return { to: [], subject: '', body: '' }
+    }
+
+    const extraRecipients = proposalExtraRecipients
+      .split(/[;,\n]/)
+      .map((email) => String(email || '').trim().toLowerCase())
+      .filter(isValidEmail)
+
+    const to = Array.from(new Set([...groupRecipientEmails, ...extraRecipients]))
+    const subject = `Trip proposal: ${proposalRangeSummary.startLabel} - ${proposalRangeSummary.endLabel}`
+    const body = [
+      'Hello all,',
+      '',
+      `I would like to propose a trip for ${proposalRangeSummary.startLabel} to ${proposalRangeSummary.endLabel}.`,
+      `Group: ${activeGroup?.name || 'Current group'}`,
+      '',
+      `Availability summary: ${proposalAvailabilitySummary.availableDays} available day(s), ${proposalAvailabilitySummary.blockedDays} busy day(s).`,
+      proposalAvailabilitySummary.isFullyAvailable
+        ? 'These selected dates are fully available for the current filters.'
+        : 'Some selected days are busy based on current filters.',
+      '',
+      'Detailed period check:',
+      ...proposalAvailabilitySummary.dayLines,
+      '',
+      'Please reply with your confirmation or alternatives.',
+    ].join('\n')
+
+    return { to, subject, body }
+  }, [
+    activeGroup?.name,
+    groupRecipientEmails,
+    proposalAvailabilitySummary,
+    proposalExtraRecipients,
+    proposalRangeSummary,
+  ])
+
+  const handleDayCardSelect = useCallback((dayKey) => {
+    setSelectedDayKey(dayKey)
+
+    if (!proposalStartKey || proposalEndKey) {
+      setProposalStartKey(dayKey)
+      setProposalEndKey('')
+      return
+    }
+
+    if (dayKey < proposalStartKey) {
+      setProposalEndKey(proposalStartKey)
+      setProposalStartKey(dayKey)
+      return
+    }
+
+    setProposalEndKey(dayKey)
+  }, [proposalEndKey, proposalStartKey])
 
   // All unique events from calendars in 'individual' mode, sorted soonest first
   const individualEvents = useMemo(() => {
@@ -963,6 +1776,7 @@ function App() {
       try {
         const res = await fetch(
           `${apiBase}/api/decisions?userId=${encodeURIComponent(user.id)}`,
+          { headers: authHeaders() },
         )
         const data = await res.json()
         setTitleDecisions(data.decisions || {})
@@ -1004,12 +1818,21 @@ function App() {
             >
               Support
             </button>
+            {isPlatformAdmin && (
+              <button
+                type="button"
+                className="ghostBtn adminEntryBtn"
+                onClick={() => setShowPlatformAdminModal(true)}
+              >
+                Admin
+              </button>
+            )}
           </div>
         </div>
         <h1>Plan group trips faster, with fewer chat loops</h1>
         <p className="lead">
-          Connect calendars, decide which events can stay flexible, and instantly find
-          realistic meetup windows your friends can actually attend.
+          A simple 5-step flow: sign in, choose your group, set calendar rules,
+          mark flexible events, and pick days that work for everyone.
         </p>
         {shareStatus && <p className="heroNotice">{shareStatus}</p>}
 
@@ -1038,8 +1861,52 @@ function App() {
         </div>
       </section>
 
+      <section className="card quickFlowCard">
+        <div className="quickFlowHeader">
+          <h2>Your setup progress</h2>
+          <span className="badge">{completedStepCount}/{onboardingSteps.length} steps done</span>
+        </div>
+        <p className="muted quickFlowIntro">
+          Follow these steps in order. You can always come back and change anything later.
+        </p>
+        <div className="quickFlowSteps" role="list" aria-label="Setup steps">
+          {onboardingSteps.map((step) => (
+            <article
+              key={step.id}
+              role="listitem"
+              className={`quickFlowStep ${step.done ? 'quickFlowStepDone' : ''}`}
+            >
+              <p className="quickFlowStepLabel">{step.label}</p>
+              <p className="quickFlowStepHelp">{step.help}</p>
+              <span className={`quickFlowStepState ${step.done ? 'quickFlowStepStateDone' : ''}`}>
+                {step.done ? 'Done' : 'Pending'}
+              </span>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="card">
-        <h2>Sign in and connect Google Calendar</h2>
+        <h2>1) Sign in and connect Google Calendar</h2>
+        <p className="muted sectionIntro">Start here. This unlocks all next steps.</p>
+        {!user && (
+          <div className="privacyNotice" role="note" aria-label="Permission and privacy notice">
+            <p>
+              This app helps groups find shared free windows for trips and meetups by comparing
+              availability across members.
+            </p>
+            <p>
+              Before signing in, please review what permission means: calendar read access lets
+              the app read your appointment data, including event titles, times, and dates across
+              your calendars, so it can calculate when you are busy.
+            </p>
+            <ul>
+              <li>Your events are used to compute busy/free windows for planning.</li>
+              <li>People in your joined group may see availability and blocking events for trip matching.</li>
+              <li>Do not connect accounts containing sensitive calendars unless you are comfortable sharing this data for group planning.</li>
+            </ul>
+          </div>
+        )}
         {!user && !googleClientId && (
           <p className="muted">
             Waiting for Google OAuth client ID from environment or backend config.
@@ -1073,76 +1940,461 @@ function App() {
             )}
 
             {accessToken && <p className="badge">Calendar connected</p>}
+
+            <div className="privacyExitRow">
+              <p className="muted privacyExitText">
+                Privacy exit: delete your records and disconnect this app from your calendar access.
+              </p>
+              <button
+                type="button"
+                className="privacyExitBtn"
+                onClick={() => void runPrivacyExit()}
+                disabled={privacyExitLoading}
+              >
+                {privacyExitLoading ? 'Removing your data...' : 'Delete my records and disconnect'}
+              </button>
+              {privacyExitNotice && <p className="muted groupNotice">{privacyExitNotice}</p>}
+            </div>
           </>
         )}
 
         {calendarError && <p className="error">{calendarError}</p>}
       </section>
 
-      <section className="card groupRosterCard">
-        <h2>Who&rsquo;s in the group</h2>
-        <p className="muted">
-          Everyone listed here has opted in and granted calendar access. When you join, they
-          can see your availability — and you can see theirs.
-        </p>
+      {user && (
+        <section className="card groupRosterCard">
+          <h2>2) Choose your group</h2>
+          <p className="muted">
+            Create a private group or join with an invite code. Data is shared only inside your active group.
+          </p>
 
-        {user && !hasJoined && (
-          <button
-            type="button"
-            className="btnPrimary joinGroupBtn"
-            onClick={() => void joinGroup()}
-            disabled={joinLoading}
-          >
-            {joinLoading ? 'Joining…' : '👋 Join this group calendar'}
-          </button>
-        )}
+          <div className="groupCompactActions">
+            <div className="groupActionSwitch" role="tablist" aria-label="Group action mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={groupEntryMode === 'create'}
+                className={`groupModeBtn ${groupEntryMode === 'create' ? 'groupModeBtnActive' : ''}`}
+                onClick={() => setGroupEntryMode('create')}
+              >
+                Create group
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={groupEntryMode === 'join'}
+                className={`groupModeBtn ${groupEntryMode === 'join' ? 'groupModeBtnActive' : ''}`}
+                onClick={() => setGroupEntryMode('join')}
+              >
+                Join by invite
+              </button>
+            </div>
 
-        {user && hasJoined && (
-          <p className="badge joinedBadge">You&rsquo;re in the group ✓</p>
-        )}
-
-        {members.length === 0 ? (
-          <p className="muted rosterEmpty">No one has joined yet — you could be the first!</p>
-        ) : (
-          <ul className="rosterList">
-            {members.map((m) => (
-              <li key={m.email} className="rosterItem">
-                {m.picture ? (
-                  <img
-                    src={m.picture}
-                    alt={m.name || m.email}
-                    className="rosterAvatar"
-                    referrerPolicy="no-referrer"
+            <div className="groupInlineForm groupInlineFormCompact">
+              {groupEntryMode === 'create' ? (
+                <>
+                  <input
+                    type="text"
+                    value={groupNameInput}
+                    onChange={(e) => setGroupNameInput(e.target.value)}
+                    placeholder="New group name"
+                    maxLength={64}
                   />
-                ) : (
-                  <span className="rosterInitials">{getInitials(m.name || m.email)}</span>
-                )}
-                <div className="rosterInfo">
-                  <span className="rosterName">{m.name || m.email}</span>
-                  {m.name && <span className="rosterEmail">{m.email}</span>}
-                </div>
-                {user?.email === m.email && (
-                  <span className="rosterYouBadge">You</span>
-                )}
-                {user?.email === m.email && (
                   <button
                     type="button"
-                    className="leaveGroupBtn"
-                    onClick={() => void leaveGroup()}
-                    disabled={leaveLoading}
+                    className="roleActionBtn"
+                    onClick={() => void createGroup()}
+                    disabled={groupActionLoading || !groupNameInput.trim()}
                   >
-                    {leaveLoading ? 'Leaving…' : 'Leave group'}
+                    {groupActionLoading ? 'Creating...' : 'Create'}
                   </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={inviteCodeInput}
+                    onChange={(e) => setInviteCodeInput(e.target.value.toUpperCase())}
+                    placeholder="Paste invite code"
+                    maxLength={12}
+                  />
+                  <button
+                    type="button"
+                    className="roleActionBtn"
+                    onClick={() => void joinGroupByInvite()}
+                    disabled={joinLoading || !inviteCodeInput.trim()}
+                  >
+                    {joinLoading ? 'Joining...' : 'Join'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {groupNotice && <p className="muted groupNotice">{groupNotice}</p>}
+
+          {groups.length > 0 && (
+            <div className="groupTopRow">
+              <div className="groupSummaryPanel">
+                <div className="groupPickerRow groupPickerDense">
+                  <label htmlFor="activeGroup">Active group</label>
+                  <select
+                    id="activeGroup"
+                    value={activeGroupId}
+                    onChange={(e) => setActiveGroupId(e.target.value)}
+                  >
+                    {groups.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name} ({group.memberCount})
+                      </option>
+                    ))}
+                  </select>
+                  {canDeleteActiveGroup && (
+                    <button
+                      type="button"
+                      className="removeMemberBtn"
+                      onClick={() => void deleteActiveGroup()}
+                      disabled={deleteGroupLoading}
+                    >
+                      {deleteGroupLoading ? 'Deleting...' : 'Delete group'}
+                    </button>
+                  )}
+                </div>
+
+                <div className="groupFactsRow">
+                  <span className="groupFactPill">Role: {activeGroup?.role === 'admin' ? 'Admin' : 'Member'}</span>
+                  <span className="groupFactPill">Members: {activeGroup?.memberCount || 0}</span>
+                  {activeGroup?.inviteCode && isCurrentUserAdmin && (
+                    <span className="groupFactPill groupFactPillInvite">Invite: {activeGroup.inviteCode}</span>
+                  )}
+                  {activeGroup?.inviteCode && isCurrentUserAdmin && (
+                    <button
+                      type="button"
+                      className="roleActionBtn"
+                      onClick={() => {
+                        void navigator.clipboard
+                          .writeText(activeGroup.inviteCode)
+                          .then(() => setGroupNotice('Invite code copied.'))
+                          .catch(() => setGroupNotice('Could not copy invite code automatically.'))
+                      }}
+                    >
+                      Copy invite
+                    </button>
+                  )}
+                  {activeGroup?.inviteCode && isCurrentUserAdmin && (
+                    <button
+                      type="button"
+                      className="roleActionBtn"
+                      onClick={() => void regenerateInviteCode()}
+                      disabled={groupActionLoading}
+                    >
+                      {groupActionLoading ? 'Updating...' : 'Regenerate code'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {activeGroup && (
+                <aside className="groupMembersSide">
+                  <div className="groupMembersSideHeader">
+                    <h3 className="groupRosterHeading">Who&apos;s in this group</h3>
+                    {hasJoined && (
+                      <p className="badge joinedBadge">You&rsquo;re in this group ✓</p>
+                    )}
+                  </div>
+                  <p className="muted groupRosterHint">
+                    Members can compare availability inside this group only.
+                  </p>
+                  {hasJoined && (
+                    <p className="muted roleHelpText">
+                      {isCurrentUserAdmin
+                        ? 'You are an admin. You can grant elevated permissions and remove members.'
+                        : 'Only admins can grant elevated permissions or remove members.'}
+                    </p>
+                  )}
+
+                  {members.length === 0 ? (
+                    <p className="muted rosterEmpty">No one has joined yet - you could be the first!</p>
+                  ) : (
+                    <ul className="rosterList rosterListCompact">
+                      {members.map((m) => (
+                        <li key={m.userId || m.email} className="rosterItem">
+                          {m.picture ? (
+                            <img
+                              src={m.picture}
+                              alt={m.name || m.email}
+                              className="rosterAvatar"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <span className="rosterInitials">{getInitials(m.name || m.email)}</span>
+                          )}
+                          <div className="rosterInfo">
+                            <span className="rosterName">{m.name || m.email}</span>
+                            {m.name && <span className="rosterEmail">{m.email}</span>}
+                          </div>
+                          <span className={`rolePill ${m.role === 'admin' ? 'rolePillAdmin' : 'rolePillMember'}`}>
+                            {m.role === 'admin' ? 'Admin' : 'Member'}
+                          </span>
+                          {user?.id === m.userId && (
+                            <span className="rosterYouBadge">You</span>
+                          )}
+                          {user?.id === m.userId && (
+                            <button
+                              type="button"
+                              className="leaveGroupBtn"
+                              onClick={() => void leaveGroup()}
+                              disabled={leaveLoading}
+                            >
+                              {leaveLoading ? 'Leaving...' : 'Leave group'}
+                            </button>
+                          )}
+                          {isCurrentUserAdmin && user?.id !== m.userId && (
+                            <div className="rosterAdminActions">
+                              <button
+                                type="button"
+                                className="roleActionBtn"
+                                onClick={() => void updateMemberRole(m.userId, m.role === 'admin' ? 'member' : 'admin')}
+                                disabled={memberActionLoadingId === `role-${m.userId}` || !m.userId}
+                              >
+                                {memberActionLoadingId === `role-${m.userId}`
+                                  ? 'Saving...'
+                                  : m.role === 'admin'
+                                    ? 'Revoke admin'
+                                    : 'Grant admin'}
+                              </button>
+                              <button
+                                type="button"
+                                className="removeMemberBtn"
+                                onClick={() => void removeGroupMember(m.userId)}
+                                disabled={memberActionLoadingId === `remove-${m.userId}` || !m.userId}
+                              >
+                                {memberActionLoadingId === `remove-${m.userId}` ? 'Removing...' : 'Remove'}
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </aside>
+              )}
+            </div>
+          )}
+
+          {!activeGroup && (
+            <p className="muted rosterEmpty">Create a group or join with an invite code to begin.</p>
+          )}
+          {memberActionError && <p className="error">{memberActionError}</p>}
+        </section>
+      )}
+
+      {showPlatformAdminModal && isPlatformAdmin && (
+        <div className="modalBackdrop" onClick={() => setShowPlatformAdminModal(false)}>
+          <div className="supportModal adminModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Platform Admin Console</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowPlatformAdminModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="platformReviewHeader">
+              <p className="groupSetupTitle">Find and manage groups</p>
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => void refreshAllGroupsReview()}
+                disabled={allGroupsReviewLoading}
+              >
+                {allGroupsReviewLoading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+
+            <div className="platformSearchRow">
+              <input
+                type="text"
+                placeholder="Search group by name or id"
+                value={platformGroupSearch}
+                onChange={(e) => setPlatformGroupSearch(e.target.value)}
+              />
+              <select
+                value={platformSelectedGroupId}
+                onChange={(e) => {
+                  setPlatformSelectedGroupId(e.target.value)
+                  setPlatformAssignGroupId(e.target.value)
+                }}
+                disabled={filteredPlatformGroups.length === 0}
+              >
+                {filteredPlatformGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} ({group.memberCount})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedPlatformGroup && (
+              <div className="platformSelectedGroupCard">
+                <p className="platformGroupName">{selectedPlatformGroup.name}</p>
+                <p className="muted">
+                  ID: {selectedPlatformGroup.id} · Members: {selectedPlatformGroup.memberCount}
+                </p>
+                <p className="muted">Admins: {(selectedPlatformGroup.admins || []).join(', ') || 'None'}</p>
+                <div className="platformGroupActions">
+                  <button
+                    type="button"
+                    className="roleActionBtn"
+                    onClick={() => {
+                      setActiveGroupId(selectedPlatformGroup.id)
+                      setShowPlatformAdminModal(false)
+                    }}
+                  >
+                    Open in main view
+                  </button>
+                  <button
+                    type="button"
+                    className="removeMemberBtn"
+                    onClick={() => void deleteGroupById(selectedPlatformGroup.id)}
+                    disabled={deleteGroupLoading}
+                  >
+                    {deleteGroupLoading ? 'Deleting...' : 'Delete this group'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="platformAdminGrid">
+              <input
+                type="email"
+                placeholder="User email"
+                value={platformAssignEmail}
+                onChange={(e) => setPlatformAssignEmail(e.target.value)}
+              />
+              <select
+                value={platformAssignRole}
+                onChange={(e) => setPlatformAssignRole(e.target.value)}
+                disabled={!selectedPlatformGroup}
+              >
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => void assignUserToGroup()}
+                disabled={platformAssignLoading || !platformAssignEmail.trim() || !selectedPlatformGroup}
+              >
+                {platformAssignLoading ? 'Assigning...' : 'Assign to selected group'}
+              </button>
+            </div>
+
+            {groupNotice && <p className="muted groupNotice">{groupNotice}</p>}
+            {allGroupsReviewNotice && <p className="muted groupNotice">{allGroupsReviewNotice}</p>}
+            {platformAssignNotice && <p className="muted groupNotice">{platformAssignNotice}</p>}
+            {allGroupsReview.length === 0 && (
+              <p className="muted groupNotice">No groups available yet.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showProposalModal && (
+        <div className="modalBackdrop" onClick={() => setShowProposalModal(false)}>
+          <div className="supportModal proposalModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Trip proposal email (simulation)</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowProposalModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <p className="muted proposalMetaLine">
+              Selected period: {proposalRangeSummary?.startLabel} - {proposalRangeSummary?.endLabel}
+            </p>
+            <p className="muted proposalMetaLine">
+              Availability in selected period: {proposalAvailabilitySummary?.availableDays || 0} available day(s), {proposalAvailabilitySummary?.blockedDays || 0} busy day(s)
+            </p>
+
+            <label className="proposalFieldLabel" htmlFor="proposalExtraRecipients">
+              Additional selected recipients (optional, comma-separated)
+            </label>
+            <input
+              id="proposalExtraRecipients"
+              className="proposalInput"
+              type="text"
+              value={proposalExtraRecipients}
+              onChange={(e) => setProposalExtraRecipients(e.target.value)}
+              placeholder="friend@example.com, another@example.com"
+            />
+
+            <label className="proposalFieldLabel" htmlFor="proposalRecipients">
+              Recipients (all group users + selected users)
+            </label>
+            <textarea
+              id="proposalRecipients"
+              className="proposalTextarea"
+              rows={3}
+              readOnly
+              value={proposalEmailPreview.to.join(', ')}
+            />
+
+            <label className="proposalFieldLabel" htmlFor="proposalSubject">
+              Subject
+            </label>
+            <input
+              id="proposalSubject"
+              className="proposalInput"
+              type="text"
+              readOnly
+              value={proposalEmailPreview.subject}
+            />
+
+            <label className="proposalFieldLabel" htmlFor="proposalBody">
+              Body
+            </label>
+            <textarea
+              id="proposalBody"
+              className="proposalTextarea"
+              rows={14}
+              readOnly
+              value={proposalEmailPreview.body}
+            />
+
+            <div className="proposalActionsRow">
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => {
+                  const emailPayload = `To: ${proposalEmailPreview.to.join(', ')}\nSubject: ${proposalEmailPreview.subject}\n\n${proposalEmailPreview.body}`
+                  void navigator.clipboard
+                    .writeText(emailPayload)
+                    .then(() => setProposalNotice('Proposal copied to clipboard.'))
+                    .catch(() => setProposalNotice('Could not copy proposal automatically.'))
+                }}
+              >
+                Copy proposal
+              </button>
+              <button
+                type="button"
+                className="btnPrimary proposalSendBtn"
+                onClick={() => setProposalNotice('Email simulation created. Share this message manually.')}
+              >
+                Simulate send
+              </button>
+            </div>
+
+            {proposalNotice && <p className="muted groupNotice">{proposalNotice}</p>}
+          </div>
+        </div>
+      )}
 
       {user && (
         <section className="card">
-          <h2>Calendar availability settings</h2>
+          <h2>3) Calendar availability settings</h2>
+          <p className="muted sectionIntro">
+            Keep this simple: set each calendar as unavailable by default, then refine only when needed.
+          </p>
           {calendars.length === 0 ? (
             <>
               <p className="muted">
@@ -1219,7 +2471,7 @@ function App() {
 
       {individualEventGroups.length > 0 && (
         <section className="card">
-          <h2>Decide individually</h2>
+          <h2>4) Decide flexible events</h2>
           <p className="muted">
             Similar recurring events are grouped together. Use{' '}
             <strong>Allow all</strong> / <strong>Block all</strong> to decide a whole series at
@@ -1334,11 +2586,11 @@ function App() {
 
       {user && (
         <section className="card">
-          <h2>Trip filters</h2>
+          <h2>5) Trip filters</h2>
           {calendars.length === 0 ? (
             <p className="muted">Trip filters will appear after calendar availability is loaded.</p>
           ) : (
-            <p className="muted">These filters update day-by-day results immediately.</p>
+            <p className="muted">Use these to quickly narrow down realistic options. Results update instantly.</p>
           )}
 
           <div className="tripControls">
@@ -1366,7 +2618,7 @@ function App() {
                 disabled={calendars.length === 0}
                 onChange={(e) => setIncludeWeekends(e.target.checked)}
               />
-              Weekend anchored windows (Sat/Sun focused)
+              Weekend-focused windows (Sat/Sun priority)
             </label>
           </div>
           {calendars.length > 0 && includeWeekends && (
@@ -1378,50 +2630,56 @@ function App() {
                     ? '2 days: must include Saturday or Sunday (for example Fri-Sat, Sat-Sun, or Sun-Mon).'
                     : `${requiredDays} days: must include both Saturday and Sunday, and either end on Sunday or start on Saturday.`}
               </p>
-              {joinedGroupBusyBlocks.length > 0 && (
-                <div className="tripUserFilter">
-                  <p className="tripUserFilterLabel">Include availability from:</p>
-                  <div className="tripUserFilterList">
-                    <label className="tripUserFilterItem">
+            </>
+          )}
+
+          {calendars.length > 0 && joinedGroupBusyBlocks.length > 0 && (
+            <div className="tripUserFilter">
+              <p className="tripUserFilterLabel">Include availability from:</p>
+              <div className="tripUserFilterList">
+                <label className="tripUserFilterItem">
+                  <input
+                    type="checkbox"
+                    checked={true}
+                    readOnly
+                    disabled
+                  />
+                  <span>{user?.email || 'You'} (you)</span>
+                </label>
+                {joinedGroupBusyBlocks.map((m) => {
+                  const memberEmail = String(m.userEmail || '').trim().toLowerCase()
+                  if (!memberEmail) return null
+
+                  return (
+                    <label key={m.userId || memberEmail} className="tripUserFilterItem">
                       <input
                         type="checkbox"
-                        checked={true}
-                        readOnly
-                        disabled
+                        checked={!excludedUsers.has(memberEmail)}
+                        onChange={(e) => {
+                          setExcludedUsers((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.delete(memberEmail)
+                            else next.add(memberEmail)
+                            return next
+                          })
+                        }}
                       />
-                      <span>{user?.email || 'You'} (you)</span>
+                      <span>{memberEmail}</span>
                     </label>
-                    {joinedGroupBusyBlocks.map((m) => (
-                      <label key={m.userEmail} className="tripUserFilterItem">
-                        <input
-                          type="checkbox"
-                          checked={!excludedUsers.has(m.userEmail)}
-                          onChange={(e) => {
-                            setExcludedUsers((prev) => {
-                              const next = new Set(prev)
-                              if (e.target.checked) next.delete(m.userEmail)
-                              else next.add(m.userEmail)
-                              return next
-                            })
-                          }}
-                        />
-                        <span>{m.userEmail}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
+                  )
+                })}
+              </div>
+            </div>
           )}
         </section>
       )}
 
       {user && (
         <section className="card">
-          <h2>Day-by-day availability (current + next 4 full months)</h2>
+          <h2>6) Day-by-day availability (current + next 4 full months)</h2>
           {!busyBlocks && (
             <p className="muted">
-              Day-by-day availability appears after calendar data is loaded.
+              Your shared calendar view appears after data is loaded.
             </p>
           )}
           {busyBlocks && (
@@ -1444,6 +2702,38 @@ function App() {
               <span className="legendItem">
                 <span className="legendBadge">AB</span> Person cannot join
               </span>
+            </div>
+          </div>
+
+          <div className="proposalBar">
+            <div>
+              <p className="proposalBarTitle">Proposal range</p>
+              <p className="muted proposalBarText">
+                {proposalRangeSummary
+                  ? proposalRangeSummary.label
+                  : 'Click one day to set a start date, then click another day to set the end date.'}
+              </p>
+            </div>
+            <div className="proposalBarActions">
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => {
+                  setProposalStartKey('')
+                  setProposalEndKey('')
+                }}
+                disabled={!proposalStartKey}
+              >
+                Clear range
+              </button>
+              <button
+                type="button"
+                className="btnPrimary proposalBtn"
+                disabled={!proposalRangeReady}
+                onClick={() => setShowProposalModal(true)}
+              >
+                Create proposal
+              </button>
             </div>
           </div>
 
@@ -1485,8 +2775,16 @@ function App() {
                               day.isFree ? 'isFreeDay' : 'isBusyDay'
                             } ${day.isPartOfCandidate ? 'isTripDay' : ''} ${
                               selectedDayKey === day.dayKey ? 'isSelectedDay' : ''
+                            } ${
+                              proposalStartKey === day.dayKey ? 'isProposalStart' : ''
+                            } ${
+                              proposalEndKey === day.dayKey ? 'isProposalEnd' : ''
+                            } ${
+                              proposalStartKey && proposalEndKey && day.dayKey >= proposalStartKey && day.dayKey <= proposalEndKey
+                                ? 'isProposalInRange'
+                                : ''
                             }`}
-                            onClick={() => setSelectedDayKey(day.dayKey)}
+                            onClick={() => handleDayCardSelect(day.dayKey)}
                           >
                             <span className="dayTitle">{day.dayLabel.split(' ')[1]}</span>
                             {day.isFree && <div className="freeIndicator" />}
@@ -1515,102 +2813,87 @@ function App() {
 
             <aside className="detailsColumn">
               <div className="dayDetailsPanel">
-                {!selectedDayKey || !availabilityData.dayLookup.has(selectedDayKey) ? (
+                {!selectedDay ? (
                   <>
                     <h3>Day details</h3>
-                    <p className="muted">Select a day to inspect blockers.</p>
+                    <p className="muted">Select a day to view busy appointments by email.</p>
                   </>
                 ) : (
                   <>
                     <h3>
-                      {availabilityData.dayLookup.get(selectedDayKey).weekday},{' '}
-                      {availabilityData.dayLookup.get(selectedDayKey).dayLabel}
+                      {selectedDay.weekday}, {selectedDay.dayLabel}
                     </h3>
-                    {availabilityData.dayLookup.get(selectedDayKey).events.length === 0 &&
-                    availabilityData.dayLookup.get(selectedDayKey).groupEvents.length === 0 ? (
+                    {selectedDayGroupedAppointments.length === 0 ? (
                       <p className="muted">Free day. No blockers.</p>
                     ) : (
-                      <>
-                        {availabilityData.dayLookup.get(selectedDayKey).events.length > 0 && (
-                          <>
-                            <p className="muted detailsSectionLabel">Your events — blocking events first.</p>
-                            <ul className="dayDetailsList">
-                            {availabilityData.dayLookup
-                              .get(selectedDayKey)
-                              .events.map((event, idx) => {
-                                const isOverriddenFree = eventOverrides[event.id] === 'free'
-                                const effectivelyFree =
-                                  event.calendarMode === 'free' ||
-                                  (event.calendarMode === 'individual' && isOverriddenFree)
-                                return (
+                      <div className="appointmentGroups">
+                        {selectedDayOwnGroup && (
+                          <div className="appointmentSection appointmentSectionOwn">
+                            <p className="appointmentSectionTitle">From your calendar</p>
+                            <section
+                              key={`${selectedDay.dayKey}-${selectedDayOwnGroup.email}`}
+                              className="appointmentGroup"
+                            >
+                              <p className="appointmentGroupEmail">{selectedDayOwnGroup.email}</p>
+                              <ul className="appointmentList">
+                                {selectedDayOwnGroup.events.map((event, idx) => (
                                   <li
-                                    key={`${selectedDayKey}-${event.id || idx}`}
-                                    className={`dayDetailsItem ${effectivelyFree ? 'eventIsFree' : 'eventIsBlocking'}`}
+                                    key={`${selectedDay.dayKey}-${selectedDayOwnGroup.email}-${event.eventId || idx}`}
+                                    className="appointmentItem"
                                   >
-                                    <p className="dayDetailsTitle">{event.title}</p>
-                                    <p className="muted">
-                                      Person/email:{' '}
-                                      {event.people.length > 0 ? event.people.join(', ') : 'Unknown'}
-                                    </p>
-                                    {event.calendarMode === 'free' && (
-                                      <span className="eventModeTag eventModeTagFree">
-                                        Calendar set to free
-                                      </span>
-                                    )}
-                                    {event.calendarMode === 'unavailable' && (
-                                      <span className="eventModeTag eventModeTagUnavailable">
-                                        Calendar set to unavailable
-                                      </span>
-                                    )}
-                                    {event.calendarMode === 'individual' && (
-                                      <div className="eventOverrideRow">
-                                        <button
-                                          type="button"
-                                          className={`overrideBtn ${effectivelyFree ? 'overrideBtnFreeActive' : 'overrideBtnFree'}`}
-                                          onClick={() => toggleEventOverride(event.id)}
-                                        >
-                                          Allow as free
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className={`overrideBtn ${!effectivelyFree ? 'overrideBtnBusyActive' : 'overrideBtnBusy'}`}
-                                          onClick={() => toggleEventOverride(event.id)}
-                                        >
-                                          Keep unavailable
-                                        </button>
-                                      </div>
-                                    )}
-                                  </li>
-                                )
-                              })}
-                            </ul>
-                          </>
-                        )}
-
-                        {availabilityData.dayLookup.get(selectedDayKey).groupEvents.length > 0 && (
-                          <>
-                            <p className="muted detailsSectionLabel" style={{ marginTop: availabilityData.dayLookup.get(selectedDayKey).events.length > 0 ? '12px' : '0' }}>
-                              Others&rsquo; events
-                            </p>
-                            <ul className="dayDetailsList">
-                              {availabilityData.dayLookup
-                                .get(selectedDayKey)
-                                .groupEvents.map((event, idx) => (
-                                  <li
-                                    key={`${selectedDayKey}-group-${event.id || idx}`}
-                                    className="dayDetailsItem eventIsBlocking"
-                                  >
-                                    <p className="dayDetailsTitle">{event.title}</p>
-                                    <p className="muted">{event.ownerName}</p>
-                                    <span className="eventModeTag eventModeTagUnavailable">
-                                      Busy
-                                    </span>
+                                    <p className="appointmentSubject">{event.subject}</p>
+                                    <div className="appointmentDecisionRow">
+                                      <button
+                                        type="button"
+                                        className={`overrideBtn overrideBtnSm ${event.decision === 'free' ? 'overrideBtnFreeActive' : 'overrideBtnFree'}`}
+                                        onClick={() => setEventAvailability(event.eventId, 'free', normalizeTitle(event.subject))}
+                                      >
+                                        Free
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className={`overrideBtn overrideBtnSm ${event.decision === 'unavailable' ? 'overrideBtnBusyActive' : 'overrideBtnBusy'}`}
+                                        onClick={() => setEventAvailability(event.eventId, 'unavailable', normalizeTitle(event.subject))}
+                                      >
+                                        Unavailable
+                                      </button>
+                                    </div>
                                   </li>
                                 ))}
-                            </ul>
-                          </>
+                              </ul>
+                            </section>
+                          </div>
                         )}
-                      </>
+
+                        {selectedDayOtherGroups.length > 0 && (
+                          <div className="appointmentSection appointmentSectionOthers">
+                            <p className="appointmentSectionTitle">From other members</p>
+                            {selectedDayOtherGroups.map((group) => (
+                              <section
+                                key={`${selectedDay.dayKey}-${group.email}`}
+                                className="appointmentGroup appointmentGroupOther"
+                              >
+                                <p className="appointmentGroupEmail">{group.email}</p>
+                                <p
+                                  className={`otherUserStatusLine ${
+                                    group.unavailableCount === 0 && group.freeCount > 0
+                                      ? 'otherUserStatusFree'
+                                      : group.freeCount === 0 && group.unavailableCount > 0
+                                        ? 'otherUserStatusUnavailable'
+                                        : 'otherUserStatusMixed'
+                                  }`}
+                                >
+                                  {group.unavailableCount === 0 && group.freeCount > 0
+                                    ? 'Free'
+                                    : group.freeCount === 0 && group.unavailableCount > 0
+                                      ? 'Unavailable'
+                                      : 'Partially unavailable'}
+                                </p>
+                              </section>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </>
                 )}
