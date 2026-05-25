@@ -25,6 +25,15 @@ A beginner-friendly full-stack starter for a web app where friends can find the 
 1. In `frontend/`, copy `.env.example` to `.env`.
 2. In `backend/`, copy `.env.example` to `.env`.
 3. Paste your Google OAuth Web Client ID in both files.
+4. For durable cloud storage, enable Firestore in `backend/.env`:
+
+```env
+USE_FIRESTORE=true
+FIRESTORE_PROJECT_ID=<YOUR_GCP_PROJECT_ID>
+FIRESTORE_NAMESPACE=friends-cal
+```
+
+5. In cloud deploys, attach a service account with Firestore permissions (or set `GOOGLE_APPLICATION_CREDENTIALS`).
 
 ## 3) Run backend
 

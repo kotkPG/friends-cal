@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { Firestore } = require('@google-cloud/firestore');
 const { OAuth2Client } = require('google-auth-library');
 const { google } = require('googleapis');
 
@@ -16,6 +17,16 @@ const MEMBERS_FILE = path.join(DATA_DIR, 'members.json');
 const GROUPS_FILE = path.join(DATA_DIR, 'groups.json');
 const BUSY_BLOCKS_FILE = path.join(DATA_DIR, 'busy-blocks.json');
 const DB_FILE = path.join(DATA_DIR, 'friends-cal.db');
+const FIRESTORE_ENABLED = String(process.env.USE_FIRESTORE || '').trim().toLowerCase() === 'true';
+const FIRESTORE_NAMESPACE = String(process.env.FIRESTORE_NAMESPACE || 'friends-cal').trim() || 'friends-cal';
+
+const BUCKET_CONFIG = [
+  { bucket: 'decisions', fallbackFilePath: DECISIONS_FILE, label: 'decisions' },
+  { bucket: 'calendar_modes', fallbackFilePath: CALENDAR_MODES_FILE, label: 'calendar modes' },
+  { bucket: 'members', fallbackFilePath: MEMBERS_FILE, label: 'members' },
+  { bucket: 'groups', fallbackFilePath: GROUPS_FILE, label: 'groups' },
+  { bucket: 'busy_blocks', fallbackFilePath: BUSY_BLOCKS_FILE, label: 'busy-blocks' },
+];
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = new Database(DB_FILE);
@@ -29,6 +40,64 @@ db.prepare(`
   )
 `).run();
 
+let firestore = null;
+if (FIRESTORE_ENABLED) {
+  try {
+    const options = {};
+    if (process.env.FIRESTORE_PROJECT_ID) {
+      options.projectId = process.env.FIRESTORE_PROJECT_ID;
+    }
+    firestore = new Firestore(options);
+  } catch (error) {
+    console.error('Failed to initialize Firestore client:', error.message);
+    firestore = null;
+  }
+}
+
+function getFirestoreBucketRef(bucket) {
+  if (!firestore) return null;
+  return firestore
+    .collection('friends_cal_storage')
+    .doc(FIRESTORE_NAMESPACE)
+    .collection('buckets')
+    .doc(String(bucket));
+}
+
+async function writeBucketToFirestore(bucket, data) {
+  const ref = getFirestoreBucketRef(bucket);
+  if (!ref) return;
+
+  await ref.set(
+    {
+      payload: data && typeof data === 'object' ? data : {},
+      updatedAt: new Date().toISOString(),
+    },
+    { merge: true },
+  );
+}
+
+async function readBucketFromFirestore(bucket) {
+  const ref = getFirestoreBucketRef(bucket);
+  if (!ref) return null;
+
+  const snapshot = await ref.get();
+  if (!snapshot.exists) return null;
+
+  const payload = snapshot.data()?.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return {};
+  }
+
+  return payload;
+}
+
+function hasLocalBucketData(bucket) {
+  const row = db
+    .prepare('SELECT COUNT(*) AS count FROM kv_store WHERE bucket = ?')
+    .get(bucket);
+  return Number(row?.count || 0) > 0;
+}
+
 function readLegacyFile(filePath, label) {
   try {
     if (fs.existsSync(filePath)) {
@@ -40,7 +109,7 @@ function readLegacyFile(filePath, label) {
   return {};
 }
 
-function writeBucket(bucket, data) {
+function writeBucket(bucket, data, options = {}) {
   const payload = data && typeof data === 'object' ? data : {};
   const entries = Object.entries(payload).map(([k, v]) => [bucket, String(k), JSON.stringify(v)]);
 
@@ -51,6 +120,12 @@ function writeBucket(bucket, data) {
     rows.forEach((row) => insertStmt.run(row[0], row[1], row[2]));
   });
   tx(entries);
+
+  if (firestore && !options.skipFirestoreSync) {
+    void writeBucketToFirestore(bucket, payload).catch((error) => {
+      console.error(`Failed to mirror bucket "${bucket}" to Firestore:`, error.message);
+    });
+  }
 }
 
 function readBucket(bucket, fallbackFilePath, label) {
@@ -250,6 +325,25 @@ function saveBusyBlocksForUser(userId, { userName, userEmail, blocks }) {
   saveBusyBlocksStore(store);
 }
 
+async function hydrateLocalBucketsFromFirestore() {
+  if (!firestore) return;
+
+  for (const config of BUCKET_CONFIG) {
+    if (hasLocalBucketData(config.bucket)) {
+      continue;
+    }
+
+    try {
+      const remotePayload = await readBucketFromFirestore(config.bucket);
+      if (remotePayload && Object.keys(remotePayload).length > 0) {
+        writeBucket(config.bucket, remotePayload, { skipFirestoreSync: true });
+      }
+    } catch (error) {
+      console.error(`Failed to hydrate bucket "${config.bucket}" from Firestore:`, error.message);
+    }
+  }
+}
+
 const app = express();
 const port = process.env.PORT || 8080;
 
@@ -344,6 +438,7 @@ app.get('/api/config', (_req, res) => {
     corsOrigins,
     calendarReadScope: 'https://www.googleapis.com/auth/calendar.readonly',
     platformAdminEmails,
+    storageMode: firestore ? 'firestore+sqlite-cache' : 'sqlite',
   });
 });
 
@@ -1194,7 +1289,16 @@ app.post('/api/privacy/delete-user-data', requireAuth, (req, res) => {
   return res.json({ ok: true, result });
 });
 
-app.listen(port, () => {
-  // Keep startup log simple for beginners.
-  console.log(`Friends Calendar API running on http://localhost:${port}`);
-});
+async function startServer() {
+  await hydrateLocalBucketsFromFirestore();
+
+  app.listen(port, () => {
+    // Keep startup log simple for beginners.
+    console.log(`Friends Calendar API running on http://localhost:${port}`);
+    if (firestore) {
+      console.log(`Firestore backing store enabled (namespace: ${FIRESTORE_NAMESPACE})`);
+    }
+  });
+}
+
+void startServer();
