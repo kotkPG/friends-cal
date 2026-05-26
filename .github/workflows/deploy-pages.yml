@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -42,10 +42,22 @@ jobs:
           VITE_PLATFORM_ADMIN_EMAILS: ${{ secrets.VITE_PLATFORM_ADMIN_EMAILS }}
         run: npm run build -- --base=/${{ github.event.repository.name }}/
 
-      - name: Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages via git
         id: deployment
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
-          cname: false
+        run: |
+          cd frontend
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages --depth=1 2>/dev/null || true
+          git symbolic-ref HEAD refs/heads/gh-pages
+          rm -rf .git/index
+          git clean -fdx
+          cp -r dist/* .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to deploy"
+          else
+            git commit -m "Deploy from ${{ github.sha }}"
+            git push -f origin HEAD:gh-pages
+          fi
+          echo "page_url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/" >> $GITHUB_OUTPUT
