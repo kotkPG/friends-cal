@@ -7,8 +7,10 @@
   --brand: #0f766e;
   --brand-soft: #d7f4ef;
   --good: #166534;
+  --font-sans: 'DM Sans', 'Segoe UI', sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
 
-  font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.45;
   font-weight: 400;
   color: var(--ink);
@@ -25,10 +27,18 @@
 
 body {
   margin: 0;
+  font-family: var(--font-sans);
   background:
     radial-gradient(circle at 10% 10%, #fff8eb 0, transparent 35%),
     radial-gradient(circle at 90% 20%, #e4f8f4 0, transparent 35%),
     var(--bg);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }
 
 #root {

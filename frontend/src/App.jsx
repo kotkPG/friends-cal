@@ -150,8 +150,8 @@ function App() {
   const [proposalExtraRecipients, setProposalExtraRecipients] = useState('')
   const [proposalNotice, setProposalNotice] = useState('')
   const [titleDecisions, setTitleDecisions] = useState({})
+  const [showDecidedByCalendar, setShowDecidedByCalendar] = useState({})
   const [groupDecisionsByUserId, setGroupDecisionsByUserId] = useState({})
-  const [showDecidedEvents, setShowDecidedEvents] = useState(false)
   const [calendarModesLoaded, setCalendarModesLoaded] = useState(false)
   const [isAutoConnecting, setIsAutoConnecting] = useState(false)
   const [showSupportModal, setShowSupportModal] = useState(false)
@@ -245,27 +245,27 @@ function App() {
         done: Boolean(user),
       },
       {
+        id: 'calendar',
+        label: '2. Calendar setup',
+        help: 'Set calendar modes and decide flexible events when needed.',
+        done: Boolean(user) && (!hasIndividualChoices || hasBusyData),
+      },
+      {
         id: 'group',
-        label: '2. Pick group',
+        label: '3. Pick group',
         help: 'Create one or join with invite code.',
         done: Boolean(user) && hasGroup,
       },
       {
-        id: 'calendar',
-        label: '3. Calendar setup',
-        help: 'Choose free / busy / individual per calendar.',
-        done: Boolean(user) && hasCalendars,
-      },
-      {
-        id: 'events',
-        label: '4. Flexible events',
-        help: 'Mark recurring events free or unavailable.',
-        done: Boolean(user) && (!hasIndividualChoices || hasBusyData),
+        id: 'filters',
+        label: '4. Trip filters',
+        help: 'Set trip length and participant filters.',
+        done: Boolean(user) && hasBusyData,
       },
       {
         id: 'plan',
         label: '5. Find best days',
-        help: 'Use filters and click any day for details.',
+        help: 'Review the calendar grid and click any day for details.',
         done: Boolean(user) && hasBusyData,
       },
     ]
@@ -745,15 +745,8 @@ function App() {
     }
   }, [saveTitleDecision])
 
-  const toggleEventOverride = useCallback((eventId) => {
-    setEventOverrides((prev) => ({
-      ...prev,
-      [eventId]: prev[eventId] === 'free' ? 'unavailable' : 'free',
-    }))
-  }, [])
-
   const setGroupDecision = useCallback(
-    (normalizedTitle, decision, groupEvents) => {
+    (decisionKey, decision, groupEvents) => {
       setEventOverrides((prev) => {
         const next = { ...prev }
         groupEvents.forEach((e) => {
@@ -761,7 +754,7 @@ function App() {
         })
         return next
       })
-      void saveTitleDecision(normalizedTitle, decision)
+      void saveTitleDecision(decisionKey, decision)
     },
     [saveTitleDecision],
   )
@@ -2099,6 +2092,22 @@ function App() {
   }, [proposalEndKey, proposalStartKey])
 
   // All unique events from calendars in 'individual' mode, sorted soonest first
+  const individualModeCalendars = useMemo(
+    () => calendars.filter((cal) => calendarModes[cal.id] === 'individual'),
+    [calendars, calendarModes],
+  )
+
+  const calendarNameById = useMemo(
+    () =>
+      new Map(
+        calendars.map((cal) => [
+          cal.id,
+          cal.primary ? `Main - ${cal.summary}` : cal.summary,
+        ]),
+      ),
+    [calendars],
+  )
+
   const individualEvents = useMemo(() => {
     if (!busyBlocks?.busyBlocks) return []
     const seen = new Set()
@@ -2115,54 +2124,60 @@ function App() {
   const individualEventGroups = useMemo(() => {
     const groupMap = new Map()
     individualEvents.forEach((event) => {
-      const key = normalizeTitle(event.title)
+      const normalizedTitle = normalizeTitle(event.title)
+      const key = `${event.calendarId}::${normalizedTitle}`
       if (!groupMap.has(key)) {
         groupMap.set(key, {
-          normalizedTitle: key,
+          groupKey: key,
+          calendarId: event.calendarId,
+          calendarName: calendarNameById.get(event.calendarId) || 'Calendar',
+          normalizedTitle,
           displayTitle: event.title || 'Busy',
           events: [],
         })
       }
       groupMap.get(key).events.push(event)
     })
-    return Array.from(groupMap.values())
-  }, [individualEvents])
+    return Array.from(groupMap.values()).sort((a, b) => {
+      const calendarCmp = a.calendarName.localeCompare(b.calendarName)
+      if (calendarCmp !== 0) return calendarCmp
+      return a.displayTitle.localeCompare(b.displayTitle)
+    })
+  }, [calendarNameById, individualEvents])
 
-  const individualEventStats = useMemo(() => {
-    let undecidedCount = 0
-    let decidedCount = 0
+  const individualDecisionCalendars = useMemo(() => {
+    return individualModeCalendars.map((calendar) => {
+      const groups = individualEventGroups
+        .filter((group) => group.calendarId === calendar.id)
+        .map((group) => {
+          const undecidedCount = group.events.filter(
+            (event) => eventOverrides[event.id] === undefined,
+          ).length
+          const decidedCount = group.events.length - undecidedCount
+          return {
+            ...group,
+            undecidedCount,
+            decidedCount,
+          }
+        })
 
-    individualEvents.forEach((event) => {
-      const decision = eventOverrides[event.id]
-      if (decision === undefined) {
-        undecidedCount += 1
-      } else {
-        decidedCount += 1
+      const undecidedCount = groups.reduce((sum, group) => sum + group.undecidedCount, 0)
+      const decidedCount = groups.reduce((sum, group) => sum + group.decidedCount, 0)
+
+      return {
+        calendarId: calendar.id,
+        calendarName: calendarNameById.get(calendar.id) || 'Calendar',
+        groups,
+        undecidedCount,
+        decidedCount,
       }
     })
+  }, [calendarNameById, eventOverrides, individualEventGroups, individualModeCalendars])
 
-    return { undecidedCount, decidedCount }
-  }, [individualEvents, eventOverrides])
-
-  const visibleIndividualEventGroups = useMemo(() => {
-    return individualEventGroups
-      .map((group) => {
-        const visibleEvents = showDecidedEvents
-          ? group.events
-          : group.events.filter((event) => eventOverrides[event.id] === undefined)
-
-        const undecidedCount = group.events.filter(
-          (event) => eventOverrides[event.id] === undefined,
-        ).length
-
-        return {
-          ...group,
-          visibleEvents,
-          undecidedCount,
-        }
-      })
-      .filter((group) => group.visibleEvents.length > 0)
-  }, [individualEventGroups, eventOverrides, showDecidedEvents])
+  const individualDecisionCalendarById = useMemo(
+    () => new Map(individualDecisionCalendars.map((calendar) => [calendar.calendarId, calendar])),
+    [individualDecisionCalendars],
+  )
 
   // Load saved title decisions whenever busyBlocks is refreshed
   useEffect(() => {
@@ -2188,9 +2203,12 @@ function App() {
     setEventOverrides((prev) => {
       const next = { ...prev }
       busyBlocks.busyBlocks.forEach((event) => {
-        const key = normalizeTitle(event.title)
-        if (titleDecisions[key] && next[event.id] === undefined) {
-          next[event.id] = titleDecisions[key]
+        const normalizedTitle = normalizeTitle(event.title)
+        const scopedKey = `${event.calendarId}::${normalizedTitle}`
+        const legacyKey = normalizedTitle
+        const decision = titleDecisions[scopedKey] || titleDecisions[legacyKey]
+        if (decision && next[event.id] === undefined) {
+          next[event.id] = decision
         }
       })
       return next
@@ -2235,8 +2253,9 @@ function App() {
         </div>
         <h1>Plan group trips faster, with fewer chat loops</h1>
         <p className="lead">
-          A simple 5-step flow: sign in, choose your group, set calendar rules,
-          mark flexible events, and pick days that work for everyone.
+          A simple 5-step flow: sign in, set calendar rules and flexible-event
+          choices, choose your group, apply trip filters, and pick days that work
+          for everyone.
         </p>
         {shareStatus && <p className="heroNotice">{shareStatus}</p>}
 
@@ -2365,9 +2384,605 @@ function App() {
         {calendarError && <p className="error">{calendarError}</p>}
       </section>
 
+      {showPlatformAdminModal && isPlatformAdmin && (
+        <div className="modalBackdrop" onClick={() => setShowPlatformAdminModal(false)}>
+          <div className="supportModal adminModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Platform Admin Console</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowPlatformAdminModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="platformReviewHeader">
+              <p className="groupSetupTitle">Find and manage groups</p>
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => void refreshAllGroupsReview()}
+                disabled={allGroupsReviewLoading}
+              >
+                {allGroupsReviewLoading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+
+            <div className="platformSearchRow">
+              <input
+                type="text"
+                placeholder="Search group by name or id"
+                value={platformGroupSearch}
+                onChange={(e) => setPlatformGroupSearch(e.target.value)}
+              />
+              <select
+                value={platformSelectedGroupId}
+                onChange={(e) => {
+                  setPlatformSelectedGroupId(e.target.value)
+                  setPlatformAssignGroupId(e.target.value)
+                }}
+                disabled={filteredPlatformGroups.length === 0}
+              >
+                {filteredPlatformGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} ({group.memberCount})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedPlatformGroup && (
+              <div className="platformSelectedGroupCard">
+                <p className="platformGroupName">{selectedPlatformGroup.name}</p>
+                <p className="muted">
+                  ID: {selectedPlatformGroup.id} · Members: {selectedPlatformGroup.memberCount}
+                </p>
+                <p className="muted">Admins: {(selectedPlatformGroup.admins || []).join(', ') || 'None'}</p>
+                <div className="platformGroupActions">
+                  <button
+                    type="button"
+                    className="roleActionBtn"
+                    onClick={() => {
+                      setActiveGroupId(selectedPlatformGroup.id)
+                      setShowPlatformAdminModal(false)
+                    }}
+                  >
+                    Open in main view
+                  </button>
+                  <button
+                    type="button"
+                    className="removeMemberBtn"
+                    onClick={() => void deleteGroupById(selectedPlatformGroup.id)}
+                    disabled={deleteGroupLoading}
+                  >
+                    {deleteGroupLoading ? 'Deleting...' : 'Delete this group'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="platformAdminGrid">
+              <input
+                type="email"
+                placeholder="User email"
+                value={platformAssignEmail}
+                onChange={(e) => setPlatformAssignEmail(e.target.value)}
+              />
+              <select
+                value={platformAssignRole}
+                onChange={(e) => setPlatformAssignRole(e.target.value)}
+                disabled={!selectedPlatformGroup}
+              >
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => void assignUserToGroup()}
+                disabled={platformAssignLoading || !platformAssignEmail.trim() || !selectedPlatformGroup}
+              >
+                {platformAssignLoading ? 'Saving...' : 'Assign or suggest selected group'}
+              </button>
+            </div>
+
+            {groupNotice && <p className="muted groupNotice">{groupNotice}</p>}
+            {allGroupsReviewNotice && <p className="muted groupNotice">{allGroupsReviewNotice}</p>}
+            {platformAssignNotice && <p className="muted groupNotice">{platformAssignNotice}</p>}
+            {allGroupsReview.length === 0 && (
+              <p className="muted groupNotice">No groups available yet.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showSupportModal && (
+        <div className="modalBackdrop" onClick={() => setShowSupportModal(false)}>
+          <div className="supportModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Support</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowSupportModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <ul className="supportList">
+              <li>If backend is disconnected, start backend at port 8080 and refresh this page.</li>
+              <li>If sign-in fails, confirm Google client ID is set in frontend and backend .env files.</li>
+              <li>If you changed account permissions, sign out and sign in again to refresh your session token.</li>
+              <li>Use Diagnostics to quickly verify health and route protection before team testing.</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {showDiagnosticsModal && isPlatformAdmin && (
+        <div className="modalBackdrop" onClick={() => setShowDiagnosticsModal(false)}>
+          <div className="supportModal diagnosticsModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Quick diagnostics</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowDiagnosticsModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <p className="muted diagnosticsIntro">
+              Use this before multi-user tests to confirm backend health and auth protection.
+            </p>
+
+            <div className="diagnosticsActions">
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => void runDiagnostics()}
+                disabled={diagnosticsLoading}
+              >
+                {diagnosticsLoading ? 'Running checks...' : 'Run checks again'}
+              </button>
+              {diagnosticsLastRunAt && (
+                <span className="muted diagnosticsTimestamp">Last run: {diagnosticsLastRunAt}</span>
+              )}
+            </div>
+
+            <ul className="diagnosticsList" aria-live="polite">
+              {diagnosticsResults.map((result) => {
+                const statusClass = result.passed
+                  ? 'diagnosticsStatusPass'
+                  : result.severity === 'warning'
+                    ? 'diagnosticsStatusWarn'
+                    : 'diagnosticsStatusFail'
+
+                return (
+                  <li key={result.label} className="diagnosticsItem">
+                    <div className="diagnosticsItemTop">
+                      <span className="diagnosticsLabel">{result.label}</span>
+                      <span className={`diagnosticsStatus ${statusClass}`}>
+                        {result.passed ? 'Pass' : result.severity === 'warning' ? 'Warning' : 'Fail'}
+                      </span>
+                    </div>
+                    <p className="diagnosticsDetail">{result.detail}</p>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {showProposalModal && (
+        <div className="modalBackdrop" onClick={() => setShowProposalModal(false)}>
+          <div className="supportModal proposalModal" onClick={(e) => e.stopPropagation()}>
+            <div className="supportModalHeader">
+              <h3>Trip proposal email (simulation)</h3>
+              <button type="button" className="ghostBtn" onClick={() => setShowProposalModal(false)}>
+                Close
+              </button>
+            </div>
+
+            <p className="muted proposalMetaLine">
+              Selected period: {proposalRangeSummary?.startLabel} - {proposalRangeSummary?.endLabel}
+            </p>
+            <p className="muted proposalMetaLine">
+              Availability in selected period: {proposalAvailabilitySummary?.availableDays || 0} available day(s), {proposalAvailabilitySummary?.blockedDays || 0} busy day(s)
+            </p>
+
+            <label className="proposalFieldLabel" htmlFor="proposalExtraRecipients">
+              Additional selected recipients (optional, comma-separated)
+            </label>
+            <input
+              id="proposalExtraRecipients"
+              className="proposalInput"
+              type="text"
+              value={proposalExtraRecipients}
+              onChange={(e) => setProposalExtraRecipients(e.target.value)}
+              placeholder="friend@example.com, another@example.com"
+            />
+
+            <label className="proposalFieldLabel" htmlFor="proposalRecipients">
+              Recipients (all group users + selected users)
+            </label>
+            <textarea
+              id="proposalRecipients"
+              className="proposalTextarea"
+              rows={3}
+              readOnly
+              value={proposalEmailPreview.to.join(', ')}
+            />
+
+            <label className="proposalFieldLabel" htmlFor="proposalSubject">
+              Subject
+            </label>
+            <input
+              id="proposalSubject"
+              className="proposalInput"
+              type="text"
+              readOnly
+              value={proposalEmailPreview.subject}
+            />
+
+            <label className="proposalFieldLabel" htmlFor="proposalBody">
+              Body
+            </label>
+            <textarea
+              id="proposalBody"
+              className="proposalTextarea"
+              rows={14}
+              readOnly
+              value={proposalEmailPreview.body}
+            />
+
+            <div className="proposalActionsRow">
+              <button
+                type="button"
+                className="roleActionBtn"
+                onClick={() => {
+                  const emailPayload = `To: ${proposalEmailPreview.to.join(', ')}\nSubject: ${proposalEmailPreview.subject}\n\n${proposalEmailPreview.body}`
+                  void navigator.clipboard
+                    .writeText(emailPayload)
+                    .then(() => setProposalNotice('Proposal copied to clipboard.'))
+                    .catch(() => setProposalNotice('Could not copy proposal automatically.'))
+                }}
+              >
+                Copy proposal
+              </button>
+              <button
+                type="button"
+                className="btnPrimary proposalSendBtn"
+                onClick={() => setProposalNotice('Email simulation created. Share this message manually.')}
+              >
+                Simulate send
+              </button>
+            </div>
+
+            {proposalNotice && <p className="muted groupNotice">{proposalNotice}</p>}
+          </div>
+        </div>
+      )}
+
+      {user && (
+        <section className="card">
+          <h2>2) Calendar availability settings</h2>
+          <p className="muted sectionIntro">
+            Keep this simple: set each calendar as unavailable by default, then refine only when needed.
+          </p>
+          {calendars.length === 0 ? (
+            <>
+              <p className="muted">
+                Calendar list has not loaded yet. Connect your calendar, then refresh availability.
+              </p>
+              <button
+                className="btnPrimary"
+                onClick={() => {
+                  void refreshCalendarConnection()
+                }}
+                disabled={calendarLoading || isAutoConnecting}
+              >
+                {calendarLoading || isAutoConnecting
+                  ? 'Connecting calendar...'
+                  : accessToken
+                    ? 'Reconnect calendar'
+                    : 'Connect calendar'}
+              </button>
+            </>
+          ) : (
+            <>
+              <details className="calendarSettingsDisclosure" open>
+                <summary className="calendarSettingsSummary">
+                  Choose how each calendar contributes to your availability
+                </summary>
+                <p className="muted calendarSettingsHint">
+                  Keep this clean by default and only adjust modes when needed.
+                </p>
+
+                <div className="calendarModeList">
+                  {calendars.map((cal) => {
+                    const isIndividual = calendarModes[cal.id] === 'individual'
+                    const decisionCalendar = individualDecisionCalendarById.get(cal.id)
+
+                    return (
+                      <div key={cal.id} className="calendarDecisionBlock">
+                        <div className="calendarModeRow">
+                          <div className="calModeLabel">
+                            <span className="calDot" style={{ background: cal.backgroundColor || '#94a3b8' }} />
+                            <span className="calModeName">
+                              {cal.primary ? 'Main — ' : ''}{cal.summary}
+                            </span>
+                          </div>
+                          <div className="calModeButtons">
+                            <button
+                              type="button"
+                              className={`calModeBtn ${calendarModes[cal.id] === 'free' ? 'calModeBtnActive calModeBtnFree' : ''}`}
+                              onClick={() => setCalendarMode(cal.id, 'free')}
+                            >
+                              Show as free
+                            </button>
+                            <button
+                              type="button"
+                              className={`calModeBtn ${calendarModes[cal.id] === 'individual' ? 'calModeBtnActive calModeBtnIndividual' : ''}`}
+                              onClick={() => setCalendarMode(cal.id, 'individual')}
+                            >
+                              Decide individually
+                            </button>
+                            <button
+                              type="button"
+                              className={`calModeBtn ${calendarModes[cal.id] === 'unavailable' ? 'calModeBtnActive calModeBtnUnavailable' : ''}`}
+                              onClick={() => setCalendarMode(cal.id, 'unavailable')}
+                            >
+                              Show as unavailable
+                            </button>
+                          </div>
+                        </div>
+
+                        {isIndividual && (
+                          <div className="sectionInlineBlock">
+                            {(() => {
+                              const undecidedGroups = (decisionCalendar?.groups || []).filter(
+                                (group) => group.undecidedCount > 0,
+                              )
+                              const decidedGroups = (decisionCalendar?.groups || []).filter(
+                                (group) => group.undecidedCount === 0,
+                              )
+                              const showDecided = Boolean(showDecidedByCalendar[cal.id])
+
+                              return (
+                                <>
+                            <div className="decisionInlineRow">
+                              <p className="groupSetupTitle decisionInlineTitle">
+                                Decide flexible events
+                              </p>
+                              <div className="decisionInlineMeta">
+                                {decisionCalendar && decisionCalendar.groups.length > 0 && (decisionCalendar?.undecidedCount || 0) === 0 && (
+                                  <span className="muted decisionInlineNote">No pending decisions</span>
+                                )}
+                                {(decisionCalendar?.undecidedCount || 0) > 0 && (
+                                  <span className="needsDecisionBadge">
+                                    {decisionCalendar?.undecidedCount || 0} pending
+                                  </span>
+                                )}
+                                <span className="groupFactPill">
+                                  {decisionCalendar?.decidedCount || 0} decided
+                                </span>
+                                {decisionCalendar?.decidedCount > 0 && (
+                                  <button
+                                    type="button"
+                                    className="toggleDecidedBtn"
+                                    onClick={() =>
+                                      setShowDecidedByCalendar((prev) => ({
+                                        ...prev,
+                                        [cal.id]: !prev[cal.id],
+                                      }))
+                                    }
+                                  >
+                                    {showDecided
+                                      ? `Hide decided (${decisionCalendar.decidedCount})`
+                                      : `Review decided (${decisionCalendar.decidedCount})`}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {!decisionCalendar || decisionCalendar.groups.length === 0 ? (
+                              <p className="muted">No events found in this calendar.</p>
+                            ) : undecidedGroups.length > 0 ? (
+                              <div className="individualEventGroups">
+                                {undecidedGroups.map((group) => {
+                                  const decisions = group.events.map((e) => eventOverrides[e.id])
+                                  const allFree = decisions.every((d) => d === 'free')
+                                  const allBusy = decisions.every((d) => d === 'unavailable')
+                                  const anyUndecided = decisions.some((d) => d === undefined)
+                                  const groupState = allFree
+                                    ? 'free'
+                                    : allBusy
+                                      ? 'busy'
+                                      : anyUndecided
+                                        ? 'undecided'
+                                        : 'mixed'
+
+                                  return (
+                                    <div
+                                      key={group.groupKey}
+                                      className={`eventGroup eventGroupCompact eventGroup--${groupState}`}
+                                    >
+                                      <div className="eventGroupHeader eventGroupHeaderCompact">
+                                        <div className="eventGroupMeta">
+                                          <span className="eventGroupTitle">{group.displayTitle}</span>
+                                          <span className="eventGroupCount">
+                                            {group.events.length} event
+                                            {group.events.length !== 1 ? 's' : ''}
+                                          </span>
+                                          <span className="needsDecisionBadge">
+                                            {group.undecidedCount} need decision
+                                          </span>
+                                        </div>
+                                        <div className="eventGroupActions">
+                                        <button
+                                          type="button"
+                                          className={`groupDecisionBtn ${allFree ? 'groupDecisionBtnFreeActive' : 'groupDecisionBtnFree'}`}
+                                          onClick={() =>
+                                            setGroupDecision(group.groupKey, 'free', group.events)
+                                          }
+                                        >
+                                          Allow all free
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={`groupDecisionBtn ${allBusy ? 'groupDecisionBtnBusyActive' : 'groupDecisionBtnBusy'}`}
+                                          onClick={() =>
+                                            setGroupDecision(group.groupKey, 'unavailable', group.events)
+                                          }
+                                        >
+                                          Block all
+                                        </button>
+                                      </div>
+                                      </div>
+                                      <ul className="eventGroupRows">
+                                        {group.events.map((event, idx) => {
+                                          const override = eventOverrides[event.id]
+                                          const isFree = override === 'free'
+                                          const isUndecided = override === undefined
+
+                                          return (
+                                            <li key={event.id || idx} className="eventGroupRow">
+                                              <span className="eventGroupRowDate">
+                                                {formatEventDateRange(event)}
+                                              </span>
+                                              <div className="eventGroupRowToggles">
+                                                <button
+                                                  type="button"
+                                                  className={`overrideBtn overrideBtnSm ${isFree ? 'overrideBtnFreeActive' : 'overrideBtnFree'}`}
+                                                  onClick={() =>
+                                                    setEventAvailability(event.id, 'free', group.groupKey)
+                                                  }
+                                                >
+                                                  Free
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  className={`overrideBtn overrideBtnSm ${!isFree && !isUndecided ? 'overrideBtnBusyActive' : 'overrideBtnBusy'}`}
+                                                  onClick={() =>
+                                                    setEventAvailability(event.id, 'unavailable', group.groupKey)
+                                                  }
+                                                >
+                                                  Busy
+                                                </button>
+                                              </div>
+                                            </li>
+                                          )
+                                        })}
+                                      </ul>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            ) : null}
+
+                            {showDecided && decidedGroups.length > 0 && (
+                              <div className="individualEventGroups">
+                                {decidedGroups.map((group) => {
+                                  const decisions = group.events.map((e) => eventOverrides[e.id])
+                                  const allFree = decisions.every((d) => d === 'free')
+                                  const allBusy = decisions.every((d) => d === 'unavailable')
+                                  const groupState = allFree
+                                    ? 'free'
+                                    : allBusy
+                                      ? 'busy'
+                                      : 'mixed'
+
+                                  return (
+                                    <div
+                                      key={`${group.groupKey}-decided`}
+                                      className={`eventGroup eventGroupCompact eventGroup--${groupState}`}
+                                    >
+                                      <div className="eventGroupHeader eventGroupHeaderCompact">
+                                        <div className="eventGroupMeta">
+                                          <span className="eventGroupTitle">{group.displayTitle}</span>
+                                          <span className="eventGroupCount">
+                                            {group.events.length} event
+                                            {group.events.length !== 1 ? 's' : ''}
+                                          </span>
+                                          <span className="groupFactPill">All decided</span>
+                                        </div>
+                                        <div className="eventGroupActions">
+                                        <button
+                                          type="button"
+                                          className={`groupDecisionBtn ${allFree ? 'groupDecisionBtnFreeActive' : 'groupDecisionBtnFree'}`}
+                                          onClick={() =>
+                                            setGroupDecision(group.groupKey, 'free', group.events)
+                                          }
+                                        >
+                                          Allow all free
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={`groupDecisionBtn ${allBusy ? 'groupDecisionBtnBusyActive' : 'groupDecisionBtnBusy'}`}
+                                          onClick={() =>
+                                            setGroupDecision(group.groupKey, 'unavailable', group.events)
+                                          }
+                                        >
+                                          Block all
+                                        </button>
+                                      </div>
+                                      </div>
+                                      <ul className="eventGroupRows">
+                                        {group.events.map((event, idx) => {
+                                          const override = eventOverrides[event.id]
+                                          const isFree = override === 'free'
+                                          const isUndecided = override === undefined
+
+                                          return (
+                                            <li key={event.id || idx} className="eventGroupRow">
+                                              <span className="eventGroupRowDate">
+                                                {formatEventDateRange(event)}
+                                              </span>
+                                              <div className="eventGroupRowToggles">
+                                                <button
+                                                  type="button"
+                                                  className={`overrideBtn overrideBtnSm ${isFree ? 'overrideBtnFreeActive' : 'overrideBtnFree'}`}
+                                                  onClick={() =>
+                                                    setEventAvailability(event.id, 'free', group.groupKey)
+                                                  }
+                                                >
+                                                  Free
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  className={`overrideBtn overrideBtnSm ${!isFree && !isUndecided ? 'overrideBtnBusyActive' : 'overrideBtnBusy'}`}
+                                                  onClick={() =>
+                                                    setEventAvailability(event.id, 'unavailable', group.groupKey)
+                                                  }
+                                                >
+                                                  Busy
+                                                </button>
+                                              </div>
+                                            </li>
+                                          )
+                                        })}
+                                      </ul>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                                </>
+                              )
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </details>
+
+              <p className="muted liveSyncNote">
+                Calendar updates are applied live. No manual refresh needed.
+              </p>
+            </>
+          )}
+        </section>
+      )}
+
       {user && (
         <section className="card groupRosterCard">
-          <h2>2) Choose your group</h2>
+          <h2>3) Choose your group</h2>
           <p className="muted">
             Create a private group or join with an invite code. Data is shared only inside your active group.
           </p>
@@ -2646,477 +3261,9 @@ function App() {
         </section>
       )}
 
-      {showPlatformAdminModal && isPlatformAdmin && (
-        <div className="modalBackdrop" onClick={() => setShowPlatformAdminModal(false)}>
-          <div className="supportModal adminModal" onClick={(e) => e.stopPropagation()}>
-            <div className="supportModalHeader">
-              <h3>Platform Admin Console</h3>
-              <button type="button" className="ghostBtn" onClick={() => setShowPlatformAdminModal(false)}>
-                Close
-              </button>
-            </div>
-
-            <div className="platformReviewHeader">
-              <p className="groupSetupTitle">Find and manage groups</p>
-              <button
-                type="button"
-                className="roleActionBtn"
-                onClick={() => void refreshAllGroupsReview()}
-                disabled={allGroupsReviewLoading}
-              >
-                {allGroupsReviewLoading ? 'Loading...' : 'Refresh'}
-              </button>
-            </div>
-
-            <div className="platformSearchRow">
-              <input
-                type="text"
-                placeholder="Search group by name or id"
-                value={platformGroupSearch}
-                onChange={(e) => setPlatformGroupSearch(e.target.value)}
-              />
-              <select
-                value={platformSelectedGroupId}
-                onChange={(e) => {
-                  setPlatformSelectedGroupId(e.target.value)
-                  setPlatformAssignGroupId(e.target.value)
-                }}
-                disabled={filteredPlatformGroups.length === 0}
-              >
-                {filteredPlatformGroups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.memberCount})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {selectedPlatformGroup && (
-              <div className="platformSelectedGroupCard">
-                <p className="platformGroupName">{selectedPlatformGroup.name}</p>
-                <p className="muted">
-                  ID: {selectedPlatformGroup.id} · Members: {selectedPlatformGroup.memberCount}
-                </p>
-                <p className="muted">Admins: {(selectedPlatformGroup.admins || []).join(', ') || 'None'}</p>
-                <div className="platformGroupActions">
-                  <button
-                    type="button"
-                    className="roleActionBtn"
-                    onClick={() => {
-                      setActiveGroupId(selectedPlatformGroup.id)
-                      setShowPlatformAdminModal(false)
-                    }}
-                  >
-                    Open in main view
-                  </button>
-                  <button
-                    type="button"
-                    className="removeMemberBtn"
-                    onClick={() => void deleteGroupById(selectedPlatformGroup.id)}
-                    disabled={deleteGroupLoading}
-                  >
-                    {deleteGroupLoading ? 'Deleting...' : 'Delete this group'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="platformAdminGrid">
-              <input
-                type="email"
-                placeholder="User email"
-                value={platformAssignEmail}
-                onChange={(e) => setPlatformAssignEmail(e.target.value)}
-              />
-              <select
-                value={platformAssignRole}
-                onChange={(e) => setPlatformAssignRole(e.target.value)}
-                disabled={!selectedPlatformGroup}
-              >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-              <button
-                type="button"
-                className="roleActionBtn"
-                onClick={() => void assignUserToGroup()}
-                disabled={platformAssignLoading || !platformAssignEmail.trim() || !selectedPlatformGroup}
-              >
-                {platformAssignLoading ? 'Saving...' : 'Assign or suggest selected group'}
-              </button>
-            </div>
-
-            {groupNotice && <p className="muted groupNotice">{groupNotice}</p>}
-            {allGroupsReviewNotice && <p className="muted groupNotice">{allGroupsReviewNotice}</p>}
-            {platformAssignNotice && <p className="muted groupNotice">{platformAssignNotice}</p>}
-            {allGroupsReview.length === 0 && (
-              <p className="muted groupNotice">No groups available yet.</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {showSupportModal && (
-        <div className="modalBackdrop" onClick={() => setShowSupportModal(false)}>
-          <div className="supportModal" onClick={(e) => e.stopPropagation()}>
-            <div className="supportModalHeader">
-              <h3>Support</h3>
-              <button type="button" className="ghostBtn" onClick={() => setShowSupportModal(false)}>
-                Close
-              </button>
-            </div>
-
-            <ul className="supportList">
-              <li>If backend is disconnected, start backend at port 8080 and refresh this page.</li>
-              <li>If sign-in fails, confirm Google client ID is set in frontend and backend .env files.</li>
-              <li>If you changed account permissions, sign out and sign in again to refresh your session token.</li>
-              <li>Use Diagnostics to quickly verify health and route protection before team testing.</li>
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {showDiagnosticsModal && isPlatformAdmin && (
-        <div className="modalBackdrop" onClick={() => setShowDiagnosticsModal(false)}>
-          <div className="supportModal diagnosticsModal" onClick={(e) => e.stopPropagation()}>
-            <div className="supportModalHeader">
-              <h3>Quick diagnostics</h3>
-              <button type="button" className="ghostBtn" onClick={() => setShowDiagnosticsModal(false)}>
-                Close
-              </button>
-            </div>
-
-            <p className="muted diagnosticsIntro">
-              Use this before multi-user tests to confirm backend health and auth protection.
-            </p>
-
-            <div className="diagnosticsActions">
-              <button
-                type="button"
-                className="roleActionBtn"
-                onClick={() => void runDiagnostics()}
-                disabled={diagnosticsLoading}
-              >
-                {diagnosticsLoading ? 'Running checks...' : 'Run checks again'}
-              </button>
-              {diagnosticsLastRunAt && (
-                <span className="muted diagnosticsTimestamp">Last run: {diagnosticsLastRunAt}</span>
-              )}
-            </div>
-
-            <ul className="diagnosticsList" aria-live="polite">
-              {diagnosticsResults.map((result) => {
-                const statusClass = result.passed
-                  ? 'diagnosticsStatusPass'
-                  : result.severity === 'warning'
-                    ? 'diagnosticsStatusWarn'
-                    : 'diagnosticsStatusFail'
-
-                return (
-                  <li key={result.label} className="diagnosticsItem">
-                    <div className="diagnosticsItemTop">
-                      <span className="diagnosticsLabel">{result.label}</span>
-                      <span className={`diagnosticsStatus ${statusClass}`}>
-                        {result.passed ? 'Pass' : result.severity === 'warning' ? 'Warning' : 'Fail'}
-                      </span>
-                    </div>
-                    <p className="diagnosticsDetail">{result.detail}</p>
-                  </li>
-                )
-              })}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {showProposalModal && (
-        <div className="modalBackdrop" onClick={() => setShowProposalModal(false)}>
-          <div className="supportModal proposalModal" onClick={(e) => e.stopPropagation()}>
-            <div className="supportModalHeader">
-              <h3>Trip proposal email (simulation)</h3>
-              <button type="button" className="ghostBtn" onClick={() => setShowProposalModal(false)}>
-                Close
-              </button>
-            </div>
-
-            <p className="muted proposalMetaLine">
-              Selected period: {proposalRangeSummary?.startLabel} - {proposalRangeSummary?.endLabel}
-            </p>
-            <p className="muted proposalMetaLine">
-              Availability in selected period: {proposalAvailabilitySummary?.availableDays || 0} available day(s), {proposalAvailabilitySummary?.blockedDays || 0} busy day(s)
-            </p>
-
-            <label className="proposalFieldLabel" htmlFor="proposalExtraRecipients">
-              Additional selected recipients (optional, comma-separated)
-            </label>
-            <input
-              id="proposalExtraRecipients"
-              className="proposalInput"
-              type="text"
-              value={proposalExtraRecipients}
-              onChange={(e) => setProposalExtraRecipients(e.target.value)}
-              placeholder="friend@example.com, another@example.com"
-            />
-
-            <label className="proposalFieldLabel" htmlFor="proposalRecipients">
-              Recipients (all group users + selected users)
-            </label>
-            <textarea
-              id="proposalRecipients"
-              className="proposalTextarea"
-              rows={3}
-              readOnly
-              value={proposalEmailPreview.to.join(', ')}
-            />
-
-            <label className="proposalFieldLabel" htmlFor="proposalSubject">
-              Subject
-            </label>
-            <input
-              id="proposalSubject"
-              className="proposalInput"
-              type="text"
-              readOnly
-              value={proposalEmailPreview.subject}
-            />
-
-            <label className="proposalFieldLabel" htmlFor="proposalBody">
-              Body
-            </label>
-            <textarea
-              id="proposalBody"
-              className="proposalTextarea"
-              rows={14}
-              readOnly
-              value={proposalEmailPreview.body}
-            />
-
-            <div className="proposalActionsRow">
-              <button
-                type="button"
-                className="roleActionBtn"
-                onClick={() => {
-                  const emailPayload = `To: ${proposalEmailPreview.to.join(', ')}\nSubject: ${proposalEmailPreview.subject}\n\n${proposalEmailPreview.body}`
-                  void navigator.clipboard
-                    .writeText(emailPayload)
-                    .then(() => setProposalNotice('Proposal copied to clipboard.'))
-                    .catch(() => setProposalNotice('Could not copy proposal automatically.'))
-                }}
-              >
-                Copy proposal
-              </button>
-              <button
-                type="button"
-                className="btnPrimary proposalSendBtn"
-                onClick={() => setProposalNotice('Email simulation created. Share this message manually.')}
-              >
-                Simulate send
-              </button>
-            </div>
-
-            {proposalNotice && <p className="muted groupNotice">{proposalNotice}</p>}
-          </div>
-        </div>
-      )}
-
       {user && (
         <section className="card">
-          <h2>3) Calendar availability settings</h2>
-          <p className="muted sectionIntro">
-            Keep this simple: set each calendar as unavailable by default, then refine only when needed.
-          </p>
-          {calendars.length === 0 ? (
-            <>
-              <p className="muted">
-                Calendar list has not loaded yet. Connect your calendar, then refresh availability.
-              </p>
-              <button
-                className="btnPrimary"
-                onClick={() => {
-                  void refreshCalendarConnection()
-                }}
-                disabled={calendarLoading || isAutoConnecting}
-              >
-                {calendarLoading || isAutoConnecting
-                  ? 'Connecting calendar...'
-                  : accessToken
-                    ? 'Reconnect calendar'
-                    : 'Connect calendar'}
-              </button>
-            </>
-          ) : (
-            <>
-              <details className="calendarSettingsDisclosure" open>
-                <summary className="calendarSettingsSummary">
-                  Choose how each calendar contributes to your availability
-                </summary>
-                <p className="muted calendarSettingsHint">
-                  Keep this clean by default and only adjust modes when needed.
-                </p>
-
-                <div className="calendarModeList">
-                  {calendars.map((cal) => (
-                    <div key={cal.id} className="calendarModeRow">
-                      <div className="calModeLabel">
-                        <span className="calDot" style={{ background: cal.backgroundColor || '#94a3b8' }} />
-                        <span className="calModeName">
-                          {cal.primary ? 'Main — ' : ''}{cal.summary}
-                        </span>
-                      </div>
-                      <div className="calModeButtons">
-                        <button
-                          type="button"
-                          className={`calModeBtn ${calendarModes[cal.id] === 'free' ? 'calModeBtnActive calModeBtnFree' : ''}`}
-                          onClick={() => setCalendarMode(cal.id, 'free')}
-                        >
-                          Show as free
-                        </button>
-                        <button
-                          type="button"
-                          className={`calModeBtn ${calendarModes[cal.id] === 'individual' ? 'calModeBtnActive calModeBtnIndividual' : ''}`}
-                          onClick={() => setCalendarMode(cal.id, 'individual')}
-                        >
-                          Decide individually
-                        </button>
-                        <button
-                          type="button"
-                          className={`calModeBtn ${calendarModes[cal.id] === 'unavailable' ? 'calModeBtnActive calModeBtnUnavailable' : ''}`}
-                          onClick={() => setCalendarMode(cal.id, 'unavailable')}
-                        >
-                          Show as unavailable
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-
-              <p className="muted liveSyncNote">
-                Calendar updates are applied live. No manual refresh needed.
-              </p>
-            </>
-          )}
-        </section>
-      )}
-
-      {individualEventGroups.length > 0 && (
-        <section className="card">
-          <h2>4) Decide flexible events</h2>
-          <p className="muted">
-            Similar recurring events are grouped together. Use{' '}
-            <strong>Allow all</strong> / <strong>Block all</strong> to decide a whole series at
-            once — your choices are saved for future visits.
-          </p>
-          <div className="section4Controls">
-            <p className="muted section4Summary">
-              {individualEventStats.undecidedCount} undecided, {individualEventStats.decidedCount}{' '}
-              decided
-            </p>
-            <button
-              type="button"
-              className="toggleDecidedBtn"
-              onClick={() => setShowDecidedEvents((prev) => !prev)}
-            >
-              {showDecidedEvents
-                ? 'Hide decided events'
-                : `Review decided events (${individualEventStats.decidedCount})`}
-            </button>
-          </div>
-
-          {visibleIndividualEventGroups.length === 0 && (
-            <p className="muted">All events are decided. Use review to inspect or change them.</p>
-          )}
-
-          <div className="individualEventGroups">
-            {visibleIndividualEventGroups.map((group) => {
-              const decisions = group.visibleEvents.map((e) => eventOverrides[e.id])
-              const allFree = decisions.every((d) => d === 'free')
-              const allBusy = decisions.every((d) => d === 'unavailable')
-              const anyUndecided = decisions.some((d) => d === undefined)
-              const groupState = allFree
-                ? 'free'
-                : allBusy
-                  ? 'busy'
-                  : anyUndecided
-                    ? 'undecided'
-                    : 'mixed'
-              return (
-                <div
-                  key={group.normalizedTitle}
-                  className={`eventGroup eventGroup--${groupState}`}
-                >
-                  <div className="eventGroupHeader">
-                    <div className="eventGroupMeta">
-                      <span className="eventGroupTitle">{group.displayTitle}</span>
-                      <span className="eventGroupCount">
-                        {group.visibleEvents.length} event
-                        {group.visibleEvents.length !== 1 ? 's' : ''}
-                      </span>
-                      {group.undecidedCount > 0 && (
-                        <span className="needsDecisionBadge">Needs decision</span>
-                      )}
-                    </div>
-                    <div className="eventGroupActions">
-                      <button
-                        type="button"
-                        className={`groupDecisionBtn ${allFree ? 'groupDecisionBtnFreeActive' : 'groupDecisionBtnFree'}`}
-                        onClick={() =>
-                          setGroupDecision(group.normalizedTitle, 'free', group.visibleEvents)
-                        }
-                      >
-                        Allow all free
-                      </button>
-                      <button
-                        type="button"
-                        className={`groupDecisionBtn ${allBusy ? 'groupDecisionBtnBusyActive' : 'groupDecisionBtnBusy'}`}
-                        onClick={() =>
-                          setGroupDecision(group.normalizedTitle, 'unavailable', group.visibleEvents)
-                        }
-                      >
-                        Block all
-                      </button>
-                    </div>
-                  </div>
-                  <ul className="eventGroupRows">
-                    {group.visibleEvents.map((event, idx) => {
-                      const override = eventOverrides[event.id]
-                      const isFree = override === 'free'
-                      const isUndecided = override === undefined
-                      return (
-                        <li key={event.id || idx} className="eventGroupRow">
-                          <span className="eventGroupRowDate">
-                            {formatEventDateRange(event)}
-                          </span>
-                          <div className="eventGroupRowToggles">
-                            <button
-                              type="button"
-                              className={`overrideBtn overrideBtnSm ${isFree ? 'overrideBtnFreeActive' : 'overrideBtnFree'}`}
-                              onClick={() => toggleEventOverride(event.id)}
-                            >
-                              Free
-                            </button>
-                            <button
-                              type="button"
-                              className={`overrideBtn overrideBtnSm ${!isFree && !isUndecided ? 'overrideBtnBusyActive' : 'overrideBtnBusy'}`}
-                              onClick={() => toggleEventOverride(event.id)}
-                            >
-                              Busy
-                            </button>
-                          </div>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      )}
-
-      {user && (
-        <section className="card">
-          <h2>5) Trip filters</h2>
+          <h2>4) Trip filters</h2>
           {calendars.length === 0 ? (
             <p className="muted">Trip filters will appear after calendar availability is loaded.</p>
           ) : (
@@ -3209,7 +3356,7 @@ function App() {
 
       {user && (
         <section className="card">
-          <h2>6) Day-by-day availability (current + next 4 full months)</h2>
+          <h2>5) Day-by-day availability (current + next 4 full months)</h2>
           {!busyBlocks && (
             <p className="muted">
               Your shared calendar view appears after data is loaded.
