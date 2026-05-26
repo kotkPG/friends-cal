@@ -44,20 +44,31 @@ jobs:
 
       - name: Deploy to GitHub Pages via git
         id: deployment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd frontend
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin gh-pages --depth=1 2>/dev/null || true
-          git symbolic-ref HEAD refs/heads/gh-pages
+          
+          # Create authenticated git URL
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+          
+          # Fetch or create gh-pages branch
+          git fetch origin gh-pages --depth=1 2>/dev/null || echo "gh-pages branch does not exist yet"
+          git checkout -b gh-pages origin/gh-pages 2>/dev/null || git checkout --orphan gh-pages
+          
+          # Clear old content and add new build
           rm -rf .git/index
           git clean -fdx
           cp -r dist/* .
           git add -A
+          
+          # Commit and push
           if git diff --cached --quiet; then
             echo "No changes to deploy"
           else
-            git commit -m "Deploy from ${{ github.sha }}"
-            git push -f origin HEAD:gh-pages
+            git commit -m "Deploy from commit ${{ github.sha }}"
+            git push origin gh-pages --force
           fi
           echo "page_url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/" >> $GITHUB_OUTPUT
