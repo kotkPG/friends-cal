@@ -42,10 +42,14 @@ jobs:
           VITE_PLATFORM_ADMIN_EMAILS: ${{ secrets.VITE_PLATFORM_ADMIN_EMAILS }}
         run: npm run build -- --base=/${{ github.event.repository.name }}/
 
+      - name: Package GitHub Pages artifact
+        run: tar -cvf github-pages.tar -C dist . && gzip -9 github-pages.tar
+
       - name: Upload pages artifact
-        uses: actions/upload-pages-artifact@a753861a5debcf57bf8b404356158c8e1e33150c
+        uses: actions/upload-artifact@v4
         with:
-          path: frontend/dist
+          name: github-pages
+          path: frontend/github-pages.tar.gz
 
   deploy:
     environment:
