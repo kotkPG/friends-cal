@@ -171,6 +171,9 @@ function App() {
   const [groupNameInput, setGroupNameInput] = useState('')
   const [inviteCodeInput, setInviteCodeInput] = useState('')
   const [groupNotice, setGroupNotice] = useState('')
+  const [groupSuggestions, setGroupSuggestions] = useState([])
+  const [groupSuggestionsLoading, setGroupSuggestionsLoading] = useState(false)
+  const [groupSuggestionActionId, setGroupSuggestionActionId] = useState('')
   const [groupActionLoading, setGroupActionLoading] = useState(false)
   const [platformAdminEmails, setPlatformAdminEmails] = useState(
     () => String(import.meta.env.VITE_PLATFORM_ADMIN_EMAILS || '')
@@ -306,6 +309,7 @@ function App() {
     setCalendars([])
     setGroups([])
     setMembers([])
+    setGroupSuggestions([])
     setActiveGroupId('')
     setBusyBlocks(null)
     setGroupBusyBlocks([])
@@ -858,6 +862,7 @@ function App() {
     setGroupBusyBlocks([])
     setMembers([])
     setGroups([])
+    setGroupSuggestions([])
     setActiveGroupId('')
     setSelectedDayKey(null)
     setProposalStartKey('')
@@ -997,6 +1002,37 @@ function App() {
     }
   }, [apiBase, authHeaders, clearAuthSession, user?.id])
 
+  const refreshGroupSuggestions = useCallback(async () => {
+    if (!user?.id || !user?.email) {
+      setGroupSuggestions([])
+      return []
+    }
+
+    setGroupSuggestionsLoading(true)
+    try {
+      const res = await fetch(`${apiBase}/api/groups/suggestions`, {
+        headers: authHeaders(),
+      })
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          clearAuthSession('Authentication failed. Please sign in again.')
+          return []
+        }
+        return []
+      }
+
+      const suggestions = Array.isArray(data.suggestions) ? data.suggestions : []
+      setGroupSuggestions(suggestions)
+      return suggestions
+    } catch (_err) {
+      return []
+    } finally {
+      setGroupSuggestionsLoading(false)
+    }
+  }, [apiBase, authHeaders, clearAuthSession, user?.email, user?.id])
+
   const refreshMembers = useCallback(async () => {
     if (!activeGroupId) {
       setMembers([])
@@ -1023,10 +1059,12 @@ function App() {
       setGroups([])
       setActiveGroupId('')
       setMembers([])
+      setGroupSuggestions([])
       return
     }
     void refreshGroups()
-  }, [refreshGroups, user?.id])
+    void refreshGroupSuggestions()
+  }, [refreshGroupSuggestions, refreshGroups, user?.id])
 
   useEffect(() => {
     void refreshMembers()
@@ -1158,6 +1196,12 @@ function App() {
         return
       }
 
+      if (data?.suggested) {
+        setPlatformAssignEmail('')
+        setPlatformAssignNotice(data.message || 'Saved pending suggestion for this email.')
+        return
+      }
+
       setPlatformAssignEmail('')
       await refreshGroups()
       setActiveGroupId(targetGroupId)
@@ -1206,6 +1250,62 @@ function App() {
       setAllGroupsReviewLoading(false)
     }
   }, [apiBase, isPlatformAdmin, user?.email])
+
+  const acceptGroupSuggestion = useCallback(async (suggestionId) => {
+    if (!suggestionId) return
+    setGroupSuggestionActionId(`accept-${suggestionId}`)
+    setGroupNotice('')
+    try {
+      const res = await fetch(`${apiBase}/api/groups/suggestions/accept`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ suggestionId }),
+      })
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        setGroupNotice(data.error || 'Could not join suggested group.')
+        return
+      }
+
+      if (data.groupId) {
+        setActiveGroupId(data.groupId)
+      }
+      await refreshGroups()
+      await refreshGroupSuggestions()
+      setGroupNotice('Joined suggested group.')
+    } catch (_err) {
+      setGroupNotice('Could not join suggested group right now.')
+    } finally {
+      setGroupSuggestionActionId('')
+    }
+  }, [apiBase, authHeaders, refreshGroupSuggestions, refreshGroups])
+
+  const dismissGroupSuggestion = useCallback(async (suggestionId) => {
+    if (!suggestionId) return
+    setGroupSuggestionActionId(`dismiss-${suggestionId}`)
+    setGroupNotice('')
+    try {
+      const res = await fetch(`${apiBase}/api/groups/suggestions/dismiss`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ suggestionId }),
+      })
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        setGroupNotice(data.error || 'Could not dismiss suggestion.')
+        return
+      }
+
+      await refreshGroupSuggestions()
+      setGroupNotice('Suggestion dismissed.')
+    } catch (_err) {
+      setGroupNotice('Could not dismiss suggestion right now.')
+    } finally {
+      setGroupSuggestionActionId('')
+    }
+  }, [apiBase, authHeaders, refreshGroupSuggestions])
 
   useEffect(() => {
     if (!isPlatformAdmin) {
@@ -2219,6 +2319,37 @@ function App() {
             Create a private group or join with an invite code. Data is shared only inside your active group.
           </p>
 
+          {groupSuggestionsLoading && <p className="muted groupNotice">Checking suggested groups...</p>}
+          {groupSuggestions.length > 0 && (
+            <div className="groupSummaryPanel">
+              <p className="groupSetupTitle">Suggested groups for you</p>
+              {groupSuggestions.map((suggestion) => (
+                <div key={suggestion.id} className="groupFactsRow">
+                  <span className="groupFactPill">{suggestion.groupName || suggestion.groupId}</span>
+                  <span className="groupFactPill">
+                    Role: {suggestion.role === 'admin' ? 'Admin' : 'Member'}
+                  </span>
+                  <button
+                    type="button"
+                    className="roleActionBtn"
+                    onClick={() => void acceptGroupSuggestion(suggestion.id)}
+                    disabled={groupSuggestionActionId === `accept-${suggestion.id}`}
+                  >
+                    {groupSuggestionActionId === `accept-${suggestion.id}` ? 'Joining...' : 'Join suggestion'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghostBtn"
+                    onClick={() => void dismissGroupSuggestion(suggestion.id)}
+                    disabled={groupSuggestionActionId === `dismiss-${suggestion.id}`}
+                  >
+                    {groupSuggestionActionId === `dismiss-${suggestion.id}` ? 'Dismissing...' : 'Dismiss'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="groupCompactActions">
             <div className="groupActionSwitch" role="tablist" aria-label="Group action mode">
               <button
@@ -2536,7 +2667,7 @@ function App() {
                 onClick={() => void assignUserToGroup()}
                 disabled={platformAssignLoading || !platformAssignEmail.trim() || !selectedPlatformGroup}
               >
-                {platformAssignLoading ? 'Assigning...' : 'Assign to selected group'}
+                {platformAssignLoading ? 'Saving...' : 'Assign or suggest selected group'}
               </button>
             </div>
 

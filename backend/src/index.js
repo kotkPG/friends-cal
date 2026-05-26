@@ -16,6 +16,7 @@ const CALENDAR_MODES_FILE = path.join(DATA_DIR, 'calendar-modes.json');
 const MEMBERS_FILE = path.join(DATA_DIR, 'members.json');
 const GROUPS_FILE = path.join(DATA_DIR, 'groups.json');
 const BUSY_BLOCKS_FILE = path.join(DATA_DIR, 'busy-blocks.json');
+const GROUP_SUGGESTIONS_FILE = path.join(DATA_DIR, 'group-suggestions.json');
 const DB_FILE = path.join(DATA_DIR, 'friends-cal.db');
 const FIRESTORE_ENABLED = String(process.env.USE_FIRESTORE || '').trim().toLowerCase() === 'true';
 const FIRESTORE_NAMESPACE = String(process.env.FIRESTORE_NAMESPACE || 'friends-cal').trim() || 'friends-cal';
@@ -26,6 +27,7 @@ const BUCKET_CONFIG = [
   { bucket: 'members', fallbackFilePath: MEMBERS_FILE, label: 'members' },
   { bucket: 'groups', fallbackFilePath: GROUPS_FILE, label: 'groups' },
   { bucket: 'busy_blocks', fallbackFilePath: BUSY_BLOCKS_FILE, label: 'busy-blocks' },
+  { bucket: 'group_suggestions', fallbackFilePath: GROUP_SUGGESTIONS_FILE, label: 'group-suggestions' },
 ];
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -326,6 +328,22 @@ function loadBusyBlocksStore() {
 
 function saveBusyBlocksStore(store) {
   writeBucket('busy_blocks', store);
+}
+
+function loadGroupSuggestionsStore() {
+  return readBucket('group_suggestions', GROUP_SUGGESTIONS_FILE, 'group-suggestions');
+}
+
+function saveGroupSuggestionsStore(store) {
+  writeBucket('group_suggestions', store);
+}
+
+function generateSuggestionId() {
+  return `sug_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
 }
 
 function saveBusyBlocksForUser(userId, { userName, userEmail, blocks }) {
@@ -649,6 +667,19 @@ app.post('/api/groups/delete', requireAuth, (req, res) => {
 
   delete groups[String(groupId)];
   saveGroups(groups);
+
+  const suggestions = loadGroupSuggestionsStore();
+  let suggestionsChanged = false;
+  Object.keys(suggestions).forEach((suggestionId) => {
+    const suggestion = suggestions[suggestionId];
+    if (String(suggestion?.groupId || '') !== String(groupId)) return;
+    delete suggestions[suggestionId];
+    suggestionsChanged = true;
+  });
+  if (suggestionsChanged) {
+    saveGroupSuggestionsStore(suggestions);
+  }
+
   return res.json({ ok: true });
 });
 
@@ -715,7 +746,7 @@ app.post('/api/platform/assign-user-group', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'Target group not found.' });
   }
 
-  const normalizedTargetEmail = String(targetEmail).trim().toLowerCase();
+  const normalizedTargetEmail = normalizeEmail(targetEmail);
 
   let resolvedUserId = targetUserId ? String(targetUserId) : '';
   let existingProfile = null;
@@ -733,7 +764,55 @@ app.post('/api/platform/assign-user-group', requireAuth, (req, res) => {
   });
 
   if (!resolvedUserId) {
-    return res.status(404).json({ error: 'Target user not found in existing records. Ask them to sign in first.' });
+    const suggestions = loadGroupSuggestionsStore();
+    const now = new Date().toISOString();
+    const existingSuggestion = Object.values(suggestions).find((item) => {
+      return item?.status === 'pending'
+        && String(item?.groupId || '') === String(targetGroup.id)
+        && normalizeEmail(item?.targetEmail) === normalizedTargetEmail;
+    });
+
+    if (existingSuggestion) {
+      suggestions[existingSuggestion.id] = {
+        ...existingSuggestion,
+        role,
+        targetEmail: normalizedTargetEmail,
+        targetUserId: existingSuggestion.targetUserId || '',
+        suggestedByUserId: req.authUser.id,
+        suggestedByEmail: normalizeEmail(req.authUser.email),
+        updatedAt: now,
+      };
+      saveGroupSuggestionsStore(suggestions);
+      return res.json({
+        ok: true,
+        suggested: true,
+        suggestionId: existingSuggestion.id,
+        groupId: targetGroup.id,
+        message: 'Suggestion updated for this email and group.',
+      });
+    }
+
+    const suggestionId = generateSuggestionId();
+    suggestions[suggestionId] = {
+      id: suggestionId,
+      targetEmail: normalizedTargetEmail,
+      targetUserId: '',
+      groupId: targetGroup.id,
+      role,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+      suggestedByUserId: req.authUser.id,
+      suggestedByEmail: normalizeEmail(req.authUser.email),
+    };
+    saveGroupSuggestionsStore(suggestions);
+    return res.json({
+      ok: true,
+      suggested: true,
+      suggestionId,
+      groupId: targetGroup.id,
+      message: 'User not found yet. Saved a pending group suggestion by email.',
+    });
   }
 
   const profile = {
@@ -765,7 +844,196 @@ app.post('/api/platform/assign-user-group', requireAuth, (req, res) => {
   };
   saveGroups(groups);
 
-  return res.json({ ok: true, groupId: targetGroup.id, userId: resolvedUserId });
+  const suggestions = loadGroupSuggestionsStore();
+  let suggestionsChanged = false;
+  const now = new Date().toISOString();
+  Object.keys(suggestions).forEach((suggestionId) => {
+    const suggestion = suggestions[suggestionId];
+    const sameGroup = String(suggestion?.groupId || '') === String(targetGroup.id);
+    const emailMatches = normalizeEmail(suggestion?.targetEmail) === normalizedTargetEmail;
+    const userMatches = String(suggestion?.targetUserId || '') === String(resolvedUserId);
+    if (!sameGroup || suggestion?.status !== 'pending' || (!emailMatches && !userMatches)) return;
+
+    suggestions[suggestionId] = {
+      ...suggestion,
+      status: 'accepted',
+      acceptedAt: now,
+      updatedAt: now,
+      targetUserId: resolvedUserId,
+      targetEmail: normalizedTargetEmail,
+    };
+    suggestionsChanged = true;
+  });
+  if (suggestionsChanged) {
+    saveGroupSuggestionsStore(suggestions);
+  }
+
+  return res.json({ ok: true, suggested: false, groupId: targetGroup.id, userId: resolvedUserId });
+});
+
+// GET /api/groups/suggestions — list pending suggestions for current user
+app.get('/api/groups/suggestions', requireAuth, (req, res) => {
+  const actorUserId = String(req.authUser.id);
+  const actorEmail = normalizeEmail(req.authUser.email);
+  const groups = loadNormalizedGroups();
+  const suggestions = loadGroupSuggestionsStore();
+  let suggestionsChanged = false;
+
+  const payload = [];
+  Object.entries(suggestions).forEach(([suggestionId, suggestion]) => {
+    if (suggestion?.status !== 'pending') return;
+
+    const group = groups[String(suggestion.groupId)];
+    if (!group) {
+      delete suggestions[suggestionId];
+      suggestionsChanged = true;
+      return;
+    }
+
+    const suggestionEmail = normalizeEmail(suggestion.targetEmail);
+    const suggestionUserId = String(suggestion.targetUserId || '');
+    const matchesUser = suggestionUserId === actorUserId || (suggestionEmail && suggestionEmail === actorEmail);
+    if (!matchesUser) return;
+
+    if (!suggestionUserId || suggestionUserId !== actorUserId) {
+      suggestions[suggestionId] = {
+        ...suggestion,
+        targetUserId: actorUserId,
+        targetEmail: actorEmail,
+        updatedAt: new Date().toISOString(),
+      };
+      suggestionsChanged = true;
+    }
+
+    if (group.members?.[actorUserId]) {
+      suggestions[suggestionId] = {
+        ...suggestion,
+        status: 'accepted',
+        acceptedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        targetUserId: actorUserId,
+        targetEmail: actorEmail,
+      };
+      suggestionsChanged = true;
+      return;
+    }
+
+    payload.push({
+      id: suggestion.id || suggestionId,
+      groupId: group.id,
+      groupName: group.name,
+      role: suggestion.role === 'admin' ? 'admin' : 'member',
+      suggestedByEmail: suggestion.suggestedByEmail || '',
+      createdAt: suggestion.createdAt || '',
+    });
+  });
+
+  if (suggestionsChanged) {
+    saveGroupSuggestionsStore(suggestions);
+  }
+
+  payload.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return res.json({ suggestions: payload });
+});
+
+// POST /api/groups/suggestions/accept — user accepts one pending suggestion
+app.post('/api/groups/suggestions/accept', requireAuth, (req, res) => {
+  const { suggestionId } = req.body;
+  if (!suggestionId) {
+    return res.status(400).json({ error: 'suggestionId is required.' });
+  }
+
+  const actorUserId = String(req.authUser.id);
+  const actorEmail = normalizeEmail(req.authUser.email);
+  const suggestions = loadGroupSuggestionsStore();
+  const suggestion = suggestions[String(suggestionId)];
+  if (!suggestion || suggestion.status !== 'pending') {
+    return res.status(404).json({ error: 'Pending suggestion not found.' });
+  }
+
+  const suggestionEmail = normalizeEmail(suggestion.targetEmail);
+  const suggestionUserId = String(suggestion.targetUserId || '');
+  const matchesUser = suggestionUserId === actorUserId || (suggestionEmail && suggestionEmail === actorEmail);
+  if (!matchesUser) {
+    return res.status(403).json({ error: 'This suggestion is not assigned to your account.' });
+  }
+
+  const groups = loadNormalizedGroups();
+  const group = groups[String(suggestion.groupId)];
+  if (!group) {
+    suggestions[String(suggestionId)] = {
+      ...suggestion,
+      status: 'dismissed',
+      dismissedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      targetUserId: actorUserId,
+      targetEmail: actorEmail,
+    };
+    saveGroupSuggestionsStore(suggestions);
+    return res.status(404).json({ error: 'Suggested group no longer exists.' });
+  }
+
+  group.members[actorUserId] = {
+    ...(group.members[actorUserId] || {}),
+    name: req.authUser.name,
+    email: actorEmail,
+    picture: req.authUser.picture,
+    role: suggestion.role === 'admin' ? 'admin' : 'member',
+    lastSeen: new Date().toISOString(),
+  };
+
+  groups[group.id] = {
+    ...group,
+    members: normalizeGroupMembers(group.members),
+  };
+  saveGroups(groups);
+
+  suggestions[String(suggestionId)] = {
+    ...suggestion,
+    status: 'accepted',
+    acceptedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    targetUserId: actorUserId,
+    targetEmail: actorEmail,
+  };
+  saveGroupSuggestionsStore(suggestions);
+
+  return res.json({ ok: true, groupId: group.id });
+});
+
+// POST /api/groups/suggestions/dismiss — user dismisses one pending suggestion
+app.post('/api/groups/suggestions/dismiss', requireAuth, (req, res) => {
+  const { suggestionId } = req.body;
+  if (!suggestionId) {
+    return res.status(400).json({ error: 'suggestionId is required.' });
+  }
+
+  const actorUserId = String(req.authUser.id);
+  const actorEmail = normalizeEmail(req.authUser.email);
+  const suggestions = loadGroupSuggestionsStore();
+  const suggestion = suggestions[String(suggestionId)];
+  if (!suggestion || suggestion.status !== 'pending') {
+    return res.status(404).json({ error: 'Pending suggestion not found.' });
+  }
+
+  const suggestionEmail = normalizeEmail(suggestion.targetEmail);
+  const suggestionUserId = String(suggestion.targetUserId || '');
+  const matchesUser = suggestionUserId === actorUserId || (suggestionEmail && suggestionEmail === actorEmail);
+  if (!matchesUser) {
+    return res.status(403).json({ error: 'This suggestion is not assigned to your account.' });
+  }
+
+  suggestions[String(suggestionId)] = {
+    ...suggestion,
+    status: 'dismissed',
+    dismissedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    targetUserId: actorUserId,
+    targetEmail: actorEmail,
+  };
+  saveGroupSuggestionsStore(suggestions);
+
+  return res.json({ ok: true });
 });
 
 // GET /api/members?groupId=<id> — return members within selected group only
@@ -1240,6 +1508,7 @@ app.post('/api/privacy/delete-user-data', requireAuth, (req, res) => {
     calendarModesDeleted: false,
     busyBlocksDeleted: false,
     legacyMemberDeleted: false,
+    groupSuggestionsDeleted: 0,
   };
 
   const groups = loadNormalizedGroups();
@@ -1298,6 +1567,28 @@ app.post('/api/privacy/delete-user-data', requireAuth, (req, res) => {
     delete legacyMembers[userKey];
     persistMembers(legacyMembers);
     result.legacyMemberDeleted = true;
+  }
+
+  const allSuggestions = loadGroupSuggestionsStore();
+  Object.keys(allSuggestions).forEach((suggestionId) => {
+    const suggestion = allSuggestions[suggestionId];
+    const targetEmail = normalizeEmail(suggestion?.targetEmail);
+    const suggestedByEmail = normalizeEmail(suggestion?.suggestedByEmail);
+    const targetUserMatch = String(suggestion?.targetUserId || '') === String(userKey);
+    const suggesterUserMatch = String(suggestion?.suggestedByUserId || '') === String(userKey);
+    const targetEmailMatch = Boolean(normalizedEmail) && targetEmail === normalizedEmail;
+    const suggesterEmailMatch = Boolean(normalizedEmail) && suggestedByEmail === normalizedEmail;
+
+    if (!targetUserMatch && !suggesterUserMatch && !targetEmailMatch && !suggesterEmailMatch) {
+      return;
+    }
+
+    delete allSuggestions[suggestionId];
+    result.groupSuggestionsDeleted += 1;
+  });
+
+  if (result.groupSuggestionsDeleted > 0) {
+    saveGroupSuggestionsStore(allSuggestions);
   }
 
   return res.json({ ok: true, result });
