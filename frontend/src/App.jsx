@@ -164,6 +164,7 @@ function App() {
   const [privacyExitNotice, setPrivacyExitNotice] = useState('')
   const [shareStatus, setShareStatus] = useState('')
   const [members, setMembers] = useState([])
+  const [pendingInvitations, setPendingInvitations] = useState([])
   const [groupBusyBlocks, setGroupBusyBlocks] = useState([])
   const [groups, setGroups] = useState([])
   const [activeGroupId, setActiveGroupId] = useState('')
@@ -309,6 +310,7 @@ function App() {
     setCalendars([])
     setGroups([])
     setMembers([])
+    setPendingInvitations([])
     setGroupSuggestions([])
     setActiveGroupId('')
     setBusyBlocks(null)
@@ -862,6 +864,7 @@ function App() {
     setGroupBusyBlocks([])
     setMembers([])
     setGroups([])
+    setPendingInvitations([])
     setGroupSuggestions([])
     setActiveGroupId('')
     setSelectedDayKey(null)
@@ -1036,6 +1039,7 @@ function App() {
   const refreshMembers = useCallback(async () => {
     if (!activeGroupId) {
       setMembers([])
+      setPendingInvitations([])
       return
     }
 
@@ -1046,6 +1050,7 @@ function App() {
       const data = await res.json()
       if (res.ok) {
         setMembers(data.members || [])
+        setPendingInvitations(Array.isArray(data.pendingInvitations) ? data.pendingInvitations : [])
       } else if (res.status === 401) {
         clearAuthSession('Authentication failed. Please sign in again.')
       }
@@ -1059,6 +1064,7 @@ function App() {
       setGroups([])
       setActiveGroupId('')
       setMembers([])
+      setPendingInvitations([])
       setGroupSuggestions([])
       return
     }
@@ -1069,6 +1075,16 @@ function App() {
   useEffect(() => {
     void refreshMembers()
   }, [refreshMembers])
+
+  useEffect(() => {
+    if (!user?.id || !activeGroupId) return undefined
+
+    const intervalId = setInterval(() => {
+      void refreshMembers()
+    }, 15000)
+
+    return () => clearInterval(intervalId)
+  }, [activeGroupId, refreshMembers, user?.id])
 
   const createGroup = useCallback(async () => {
     if (!user?.id || !groupNameInput.trim()) return
@@ -1198,6 +1214,7 @@ function App() {
 
       if (data?.suggested) {
         setPlatformAssignEmail('')
+        await refreshMembers()
         setPlatformAssignNotice(data.message || 'Saved pending suggestion for this email.')
         return
       }
@@ -1462,6 +1479,40 @@ function App() {
       }
     },
     [activeGroupId, apiBase, refreshMembers, user?.id],
+  )
+
+  const removePendingInvitation = useCallback(
+    async (invitationId) => {
+      if (!user?.id || !activeGroupId || !invitationId) return
+
+      const actionKey = `pending-remove-${invitationId}`
+      setMemberActionError('')
+      setMemberActionLoadingId(actionKey)
+
+      try {
+        const res = await fetch(`${apiBase}/api/groups/invitations/remove`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            groupId: activeGroupId,
+            invitationId,
+          }),
+        })
+
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          setMemberActionError(data.error || 'Could not remove pending invitation.')
+          return
+        }
+
+        await refreshMembers()
+      } catch (_err) {
+        setMemberActionError('Could not remove pending invitation right now.')
+      } finally {
+        setMemberActionLoadingId('')
+      }
+    },
+    [activeGroupId, apiBase, authHeaders, refreshMembers, user?.id],
   )
 
   const findBusyBlocks = useCallback(async () => {
@@ -2162,13 +2213,15 @@ function App() {
             >
               Support
             </button>
-            <button
-              type="button"
-              className="ghostBtn"
-              onClick={() => setShowDiagnosticsModal(true)}
-            >
-              Diagnostics
-            </button>
+            {isPlatformAdmin && (
+              <button
+                type="button"
+                className="ghostBtn"
+                onClick={() => setShowDiagnosticsModal(true)}
+              >
+                Diagnostics
+              </button>
+            )}
             {isPlatformAdmin && (
               <button
                 type="button"
@@ -2557,6 +2610,28 @@ function App() {
                           )}
                         </li>
                       ))}
+                      {pendingInvitations.map((invite) => (
+                        <li key={`pending-${invite.id || invite.email}`} className="rosterItem">
+                          <span className="rosterInitials">{getInitials(invite.email)}</span>
+                          <div className="rosterInfo">
+                            <span className="rosterName">{invite.email}</span>
+                            <span className="rosterEmail">Invite not yet approved</span>
+                          </div>
+                          <span className="rolePill rolePillMember">
+                            {invite.role === 'admin' ? 'Pending admin' : 'Pending'}
+                          </span>
+                          {isCurrentUserAdmin && (
+                            <button
+                              type="button"
+                              className="removeMemberBtn"
+                              onClick={() => void removePendingInvitation(invite.id)}
+                              disabled={memberActionLoadingId === `pending-remove-${invite.id}` || !invite.id}
+                            >
+                              {memberActionLoadingId === `pending-remove-${invite.id}` ? 'Removing...' : 'Remove'}
+                            </button>
+                          )}
+                        </li>
+                      ))}
                     </ul>
                   )}
                 </aside>
@@ -2701,7 +2776,7 @@ function App() {
         </div>
       )}
 
-      {showDiagnosticsModal && (
+      {showDiagnosticsModal && isPlatformAdmin && (
         <div className="modalBackdrop" onClick={() => setShowDiagnosticsModal(false)}>
           <div className="supportModal diagnosticsModal" onClick={(e) => e.stopPropagation()}>
             <div className="supportModalHeader">

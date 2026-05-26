@@ -1036,6 +1036,42 @@ app.post('/api/groups/suggestions/dismiss', requireAuth, (req, res) => {
   return res.json({ ok: true });
 });
 
+// POST /api/groups/invitations/remove — group admin removes a pending invitation
+app.post('/api/groups/invitations/remove', requireAuth, (req, res) => {
+  const { groupId, invitationId } = req.body;
+  const actorUserId = String(req.authUser.id);
+  const actorEmail = normalizeEmail(req.authUser.email);
+
+  if (!groupId || !invitationId) {
+    return res.status(400).json({ error: 'groupId and invitationId are required.' });
+  }
+
+  const groups = loadNormalizedGroups();
+  const group = groups[String(groupId)];
+  if (!group) return res.status(404).json({ error: 'Group not found.' });
+
+  const actor = group.members[String(actorUserId)];
+  const isGroupAdmin = actor?.role === 'admin';
+  const isPlatformAdmin = isPlatformAdminEmail(actorEmail);
+  if (!isGroupAdmin && !isPlatformAdmin) {
+    return res.status(403).json({ error: 'Only group admins can remove pending invitations.' });
+  }
+
+  const suggestions = loadGroupSuggestionsStore();
+  const suggestion = suggestions[String(invitationId)];
+  if (!suggestion || suggestion.status !== 'pending') {
+    return res.status(404).json({ error: 'Pending invitation not found.' });
+  }
+
+  if (String(suggestion.groupId || '') !== String(group.id)) {
+    return res.status(400).json({ error: 'Invitation does not belong to this group.' });
+  }
+
+  delete suggestions[String(invitationId)];
+  saveGroupSuggestionsStore(suggestions);
+  return res.json({ ok: true });
+});
+
 // GET /api/members?groupId=<id> — return members within selected group only
 app.get('/api/members', requireAuth, (req, res) => {
   const { groupId } = req.query;
@@ -1052,7 +1088,34 @@ app.get('/api/members', requireAuth, (req, res) => {
     .map(([userId, data]) => sanitizeGroupMember(userId, data))
     .sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
 
-  return res.json({ members: list });
+  const memberUserIds = new Set(Object.keys(group.members || {}).map((id) => String(id)));
+  const memberEmails = new Set(
+    Object.values(group.members || {})
+      .map((member) => normalizeEmail(member?.email))
+      .filter(Boolean),
+  );
+  const suggestions = loadGroupSuggestionsStore();
+  const pendingInvitations = Object.entries(suggestions)
+    .filter(([, suggestion]) => {
+      if (suggestion?.status !== 'pending') return false;
+      if (String(suggestion?.groupId || '') !== String(group.id)) return false;
+
+      const targetUserId = String(suggestion?.targetUserId || '');
+      const targetEmail = normalizeEmail(suggestion?.targetEmail);
+      if (targetUserId && memberUserIds.has(targetUserId)) return false;
+      if (targetEmail && memberEmails.has(targetEmail)) return false;
+      return Boolean(targetEmail);
+    })
+    .map(([suggestionId, suggestion]) => ({
+      id: suggestion.id || suggestionId,
+      email: normalizeEmail(suggestion.targetEmail),
+      role: suggestion.role === 'admin' ? 'admin' : 'member',
+      createdAt: suggestion.createdAt || '',
+      suggestedByEmail: suggestion.suggestedByEmail || '',
+    }))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+
+  return res.json({ members: list, pendingInvitations });
 });
 
 // POST /api/members/leave — remove self from a group roster
