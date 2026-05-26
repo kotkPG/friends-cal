@@ -42,23 +42,10 @@ jobs:
           VITE_PLATFORM_ADMIN_EMAILS: ${{ secrets.VITE_PLATFORM_ADMIN_EMAILS }}
         run: npm run build -- --base=/${{ github.event.repository.name }}/
 
-      - name: Package GitHub Pages artifact
-        run: tar -cvf github-pages.tar -C dist . && gzip -9 github-pages.tar
-
-      - name: Upload pages artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: github-pages
-          path: frontend/github-pages.tar.gz
-
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          cname: false
