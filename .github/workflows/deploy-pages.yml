@@ -39,6 +39,7 @@ jobs:
         env:
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+          VITE_PLATFORM_ADMIN_EMAILS: ${{ secrets.VITE_PLATFORM_ADMIN_EMAILS }}
         run: npm run build -- --base=/${{ github.event.repository.name }}/
 
       - name: Upload pages artifact

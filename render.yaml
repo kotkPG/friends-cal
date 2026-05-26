@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: friends-cal-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node src/index.js
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_ENV
+        value: production
+      - key: USE_FIRESTORE
+        value: "true"
+      - key: FIRESTORE_NAMESPACE
+        value: friends-cal
+      # Set these in the Render dashboard as secret env vars:
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: FIRESTORE_PROJECT_ID
+        sync: false
+      - key: PLATFORM_ADMIN_EMAILS
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      # Base64-encoded GCP service account JSON key for Firestore auth on non-GCP hosts.
+      # Generate: base64 -w 0 your-service-account-key.json
+      # On Windows:  [Convert]::ToBase64String([IO.File]::ReadAllBytes('key.json'))
+      - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+        sync: false

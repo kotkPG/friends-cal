@@ -2192,17 +2192,6 @@ function App() {
 
             {accessToken && calendars.length > 0 && <p className="badge">Calendar connected</p>}
 
-            <button
-              type="button"
-              className="roleActionBtn"
-              onClick={() => {
-                void refreshCalendarConnection()
-              }}
-              disabled={calendarLoading || isAutoConnecting}
-            >
-              {calendarLoading || isAutoConnecting ? 'Refreshing calendar...' : 'Refresh calendar connection'}
-            </button>
-
             <div className="privacyExitRow">
               <p className="muted privacyExitText">
                 Privacy exit: delete your records and disconnect this app from your calendar access.

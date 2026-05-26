@@ -40,6 +40,20 @@ db.prepare(`
   )
 `).run();
 
+// When running outside GCP (e.g. Render), provide a base64-encoded service
+// account JSON via GOOGLE_APPLICATION_CREDENTIALS_JSON.  We decode it to a
+// temp file and point the SDK at it before constructing the Firestore client.
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+  try {
+    const keyJson = Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON, 'base64').toString('utf8');
+    const keyPath = path.join(DATA_DIR, '_sa_key.json');
+    fs.writeFileSync(keyPath, keyJson, { mode: 0o600 });
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = keyPath;
+  } catch (error) {
+    console.error('Failed to decode GOOGLE_APPLICATION_CREDENTIALS_JSON:', error.message);
+  }
+}
+
 let firestore = null;
 if (FIRESTORE_ENABLED) {
   try {
